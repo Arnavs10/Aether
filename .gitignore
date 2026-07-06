@@ -21,3 +21,8 @@ venv/
 
 # Notebook checkpoints
 .ipynb_checkpoints/
+*.csv
+phase_2_music_data/*.csv
+*.csv
+phase_2_music_data/*.csv
+phase_2_music_data/store/
