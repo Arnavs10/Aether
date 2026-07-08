@@ -150,6 +150,7 @@ class AetherRecommender:
         year_max: Optional[int] = None,
         arc: Optional[str] = None,
         space_artists: bool = True,
+        freshness_ratio: float = 0.0,
     ) -> Recommendation:
         """
         Produce a finished recommendation from a fused emotion distribution.
@@ -164,6 +165,11 @@ class AetherRecommender:
                  If None, chosen automatically from the dominant emotion +
                  intensity via sequencer.default_arc_for().
             space_artists: avoid consecutive same-artist tracks.
+            freshness_ratio: Hybrid-C freshness blend in [0, 1]. Fraction of the
+                 playlist sourced as *current-catalog* tracks via the provider's
+                 discover() (e.g. 0.4 = 40% fresh, 60% cosine-matched store).
+                 0.0 (default) = pure store, provider-independent. Requires a
+                 provider whose discover() returns tracks (NullProvider → 0).
 
         Returns:
             A Recommendation (ordered Tracks + full provenance).
@@ -192,19 +198,38 @@ class AetherRecommender:
         except Exception as exc:  # normalize any Phase 3 failure at the boundary
             raise Phase3ContractError(f"Phase 3 generate() failed: {exc}") from exc
 
-        # 3. Normalize + re-hydrate features → Phase 4 Tracks.
-        tracks = [self._to_track(ms) for ms in pr.songs]
+        # 3. Normalize + re-hydrate features → Phase 4 Tracks (store picks).
+        store_tracks = [self._to_track(ms) for ms in pr.songs]
 
-        # 4. Choose an arc shape and sequence for flow + variety.
+        # 4. Hybrid-C freshness: fetch current-catalog tracks for the dominant
+        #    emotion and reserve room for them (0 fresh if ratio<=0 or provider
+        #    can't discover — e.g. NullProvider).
         dominant = pr.emotions[0] if pr.emotions else "calm"
-        shape = arc or default_arc_for(dominant, pr.intensity)
-        tracks = sequence(tracks, shape=shape, space_artists=space_artists)
+        ratio = float(np.clip(freshness_ratio, 0.0, 1.0))
+        fresh_tracks: list[Track] = []
+        if ratio > 0.0:
+            n_fresh = min(int(round(length * ratio)), max(0, length - 1))
+            if n_fresh > 0:
+                try:
+                    fresh_tracks = self.provider.discover(dominant, n_fresh)[:n_fresh]
+                except Exception:
+                    fresh_tracks = []  # freshness is best-effort; never break core
+                if fresh_tracks:
+                    store_tracks = store_tracks[: length - len(fresh_tracks)]
 
-        # 5. Delivery seam (no-op offline; Deezer/Spotify attach playable data).
+        # 5. Sequence the (feature-rich) store picks into the energy arc, then
+        #    weave the fresh picks through (they carry no audio features, so they
+        #    flow by discovery order — Phase 5's learned features will arc them).
+        shape = arc or default_arc_for(dominant, pr.intensity)
+        store_arc = sequence(store_tracks, shape=shape, space_artists=space_artists)
+        tracks = self._weave(store_arc, fresh_tracks)
+
+        # 6. Delivery seam: enrich store picks with playable data (fresh picks
+        #    already carry it from discover()). No-op offline.
         tracks = self.provider.enrich(tracks)
 
-        # 6. Assemble the explained result.
-        reason = self._compose_reason(pr, shape)
+        # 7. Assemble the explained result.
+        reason = self._compose_reason(pr, shape, len(fresh_tracks))
         dominant_emotions = [
             (e, float(w)) for e, w in zip(pr.emotions, pr.weights)
         ]
@@ -220,10 +245,41 @@ class AetherRecommender:
         )
 
     @staticmethod
-    def _compose_reason(pr: PlaylistResult, shape: str) -> str:
-        """Extend Phase 3's reason with the Phase 4 sequencing decision."""
+    def _weave(primary: list[Track], extra: list[Track]) -> list[Track]:
+        """
+        Evenly interleave `extra` (fresh discover picks) through `primary` (the
+        arc'd store picks), then re-stamp 1-based ranks on the combined list.
+        Nothing is dropped; if either list is empty the other is returned as-is
+        (with ranks refreshed).
+        """
+        if not extra:
+            combined = list(primary)
+        elif not primary:
+            combined = list(extra)
+        else:
+            gap = max(1, len(primary) // (len(extra) + 1))
+            combined, ei = [], 0
+            for i, track in enumerate(primary):
+                combined.append(track)
+                if ei < len(extra) and (i + 1) % gap == 0:
+                    combined.append(extra[ei])
+                    ei += 1
+            while ei < len(extra):        # append any leftovers
+                combined.append(extra[ei])
+                ei += 1
+        for idx, track in enumerate(combined, start=1):
+            track.rank = idx
+        return combined
+
+    @staticmethod
+    def _compose_reason(pr: PlaylistResult, shape: str, n_fresh: int = 0) -> str:
+        """Extend Phase 3's reason with the Phase 4 sequencing + freshness decision."""
         arc_phrase = _ARC_PHRASE.get(shape, "sequenced")
-        return f"{pr.reason} Tracks {arc_phrase}."
+        fresh_phrase = (
+            f" plus {n_fresh} fresh current-catalog pick{'s' if n_fresh != 1 else ''}"
+            if n_fresh else ""
+        )
+        return f"{pr.reason} Tracks {arc_phrase}{fresh_phrase}."
 
 
 # ─────────────────────────────────────────────────────────────
@@ -310,6 +366,46 @@ def _selftest() -> None:
         raise AssertionError("expected InvalidRequestError")
     except InvalidRequestError:
         pass
+
+    # 8. Hybrid-C freshness blend (fake provider — no network).
+    from provider import MusicProvider
+
+    class _FakeProvider(MusicProvider):
+        name = "fake"
+
+        def enrich(self, tracks):
+            for t in tracks:
+                if not t.provider_ref:
+                    t.provider_ref = {"source": "fake", "preview_url": "http://x/p.mp3"}
+            return tracks
+
+        def discover(self, emotion, limit):
+            return [
+                Track(title=f"Fresh-{emotion}-{i}", artist=f"New{i}",
+                      track_id=f"fake:{emotion}:{i}", source_emotion=emotion,
+                      provider_ref={"source": "fake", "preview_url": "http://x/f.mp3"})
+                for i in range(limit)
+            ]
+
+        def export_playlist(self, tracks, name):
+            return {"id": "fake123", "name": name, "count": len(tracks)}
+
+    rec_fresh = AetherRecommender(generator, provider=_FakeProvider())
+    r_hy = rec_fresh.recommend(dist(happy=0.8), "happy", length=5, freshness_ratio=0.4)
+    fresh = [t for t in r_hy.tracks if str(t.track_id).startswith("fake:")]
+    store_p = [t for t in r_hy.tracks if not str(t.track_id).startswith("fake:")]
+    assert r_hy.size == 5, r_hy.size                       # total respected
+    assert len(fresh) == 2, len(fresh)                     # round(5*0.4)=2 fresh
+    assert len(store_p) == 3, len(store_p)                 # rest from store
+    assert [t.rank for t in r_hy.tracks] == [1, 2, 3, 4, 5]  # re-ranked
+    assert all(t.provider_ref for t in r_hy.tracks)        # all playable
+    assert "fresh" in r_hy.reason                           # reason mentions it
+    print(f"  hybrid-C (40% fresh) → {[t.title for t in r_hy.tracks]}")
+
+    # 9. ratio=0 stays pure-store (backward compatible).
+    r_zero = rec_fresh.recommend(dist(happy=0.8), "happy", length=3, freshness_ratio=0.0)
+    assert not any(str(t.track_id).startswith("fake:") for t in r_zero.tracks)
+    print("  freshness_ratio=0 → pure store ✓")
 
     print("-" * 55)
     print("✅ All recommender self-tests passed.")

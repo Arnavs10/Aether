@@ -47,6 +47,19 @@ class MusicProvider(ABC):
         raise NotImplementedError
 
     @abstractmethod
+    def discover(self, emotion: str, limit: int) -> list[Track]:
+        """
+        Source *fresh, current-catalog* tracks for an Aether `emotion` (the
+        freshness layer of Hybrid C). Implementations map the emotion to a
+        mood query / genre against the live service and return up to `limit`
+        ready-to-play Tracks (``provider_ref`` filled, ``energy``/``valence``
+        typically ``None`` since the live service doesn't expose them).
+
+        Returns [] if the provider can't discover (e.g. offline).
+        """
+        raise NotImplementedError
+
+    @abstractmethod
     def export_playlist(self, tracks: list[Track], name: str) -> dict:
         """
         Create a playlist named `name` on the user's account and add `tracks`.
@@ -69,6 +82,9 @@ class NullProvider(MusicProvider):
     def enrich(self, tracks: list[Track]) -> list[Track]:
         return tracks
 
+    def discover(self, emotion: str, limit: int) -> list[Track]:
+        return []
+
     def export_playlist(self, tracks: list[Track], name: str) -> dict:
         raise RuntimeError(
             "No live provider configured — export is unavailable in offline "
@@ -86,6 +102,9 @@ def _run_self_tests() -> None:
     # enrich is a no-op passthrough (order + identity preserved).
     out = p.enrich(ts)
     assert out is ts and [t.title for t in out] == ["x", "y"]
+
+    # discover returns nothing offline.
+    assert p.discover("happy", 5) == []
 
     # export refuses cleanly in offline mode.
     try:
