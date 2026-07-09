@@ -264,11 +264,12 @@ def build_knowledge_base() -> list[KnowledgeDoc]:
     for emo in emotions:
         sonic = _EMOTION_SONICS.get(emo, "a distinct musical character")
         profile = _emotion_profile_sentence(emo)
+        article = "An" if emo[:1].lower() in "aeiou" else "A"
         docs.append(KnowledgeDoc(
             doc_id=f"emotion:{emo}",
             title=f"The sound of {emo}",
             text=(
-                f"A {emo} mood is served by {sonic}. {profile} "
+                f"{article} {emo} mood is served by {sonic}. {profile} "
                 f"Songs are chosen when their audio features land close to this "
                 f"target, which is what makes them read as {emo}."
             ),
