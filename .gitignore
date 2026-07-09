@@ -1,28 +1,14 @@
-# Large model weights & datasets — keep local, never commit
-Aether_models/
-data/
-models/
-*.pt
-*.npz
-*.jsonl
-*.ckpt
-*.safetensors
-*.bin
-
-# Python
 __pycache__/
-*.pyc
-.venv/
-venv/
-
-# OS / editor
+*.py[cod]
 .DS_Store
-.vscode/
-
-# Notebook checkpoints
-.ipynb_checkpoints/
-*.csv
-phase_2_music_data/*.csv
-*.csv
-phase_2_music_data/*.csv
+Aether_models/
+models/
+data/
 phase_2_music_data/store/
+tracks_features.csv
+*.safetensors
+*.pt
+*.pth
+*.bin
+*.ckpt
+*.npz
