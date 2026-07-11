@@ -27,6 +27,7 @@ class TrackOut(BaseModel):
     tempo: Optional[float] = None
     match_score: Optional[float] = None
     why: Optional[str] = None
+    why_technical: Optional[str] = None
 
 
 # ── curate (main feature) ──

@@ -111,6 +111,7 @@ class AetherExplainer:
         # Explanations are in track order (explain iterates rec.tracks in order).
         for track, te in zip(recommendation.tracks, expl.tracks):
             track.extra["why"] = te.why
+            track.extra["why_technical"] = getattr(te, "why_technical", "")
             track.extra["why_citations"] = te.citations
             if te.feature_notes:
                 track.extra["why_features"] = te.feature_notes

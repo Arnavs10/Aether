@@ -82,15 +82,16 @@ class TrackExplanation:
     title: str
     artist: str
     emotion: str
-    why: str
+    why: str                                               # plain-language, no jargon
+    why_technical: str = ""                                # feature-grounded, on-demand
     citations: list[str] = field(default_factory=list)     # doc_ids grounding it
     feature_notes: dict[str, Any] = field(default_factory=dict)
 
     def as_dict(self) -> dict[str, Any]:
         return {
             "title": self.title, "artist": self.artist, "emotion": self.emotion,
-            "why": self.why, "citations": self.citations,
-            "feature_notes": self.feature_notes,
+            "why": self.why, "why_technical": self.why_technical,
+            "citations": self.citations, "feature_notes": self.feature_notes,
         }
 
 
@@ -359,11 +360,12 @@ class LLMExplainer(Explainer):
             for h in info["hits"][:2]:
                 used[h.doc.doc_id] = h.doc.title
             try:
-                why = self._llm_track(tr, info)
+                why_simple, why_tech = self._llm_track(tr, info)
                 cites = [h.doc.doc_id for h in info["hits"][:2]]
                 track_expls.append(TrackExplanation(
                     title=tr.title, artist=tr.artist, emotion=info["emotion"],
-                    why=why.strip(), citations=cites, feature_notes=info["deltas"],
+                    why=why_simple.strip(), why_technical=why_tech.strip(),
+                    citations=cites, feature_notes=info["deltas"],
                 ))
             except Exception:
                 # Any LLM failure → deterministic grounded fallback for this track.
@@ -378,7 +380,8 @@ class LLMExplainer(Explainer):
         return Explanation(summary=summary, tracks=track_expls, citations=citations)
 
     # ── prompt construction (grounding-constrained) ──
-    def _llm_track(self, track: Any, info: dict[str, Any]) -> str:
+    def _llm_track(self, track: Any, info: dict[str, Any]) -> tuple[str, str]:
+        """Return (simple, technical) explanations from a single LLM call."""
         context = "\n".join(f"- {h.doc.title}: {h.doc.text}" for h in info["hits"][:3])
         deltas = "; ".join(
             f"{f}: track {d['track']:.2f} vs {info['emotion']} target {d['target']:.2f}"
@@ -386,14 +389,39 @@ class LLMExplainer(Explainer):
         ) or "no feature data"
         prompt = (
             "You explain why a song fits a listener's mood. Use ONLY the context "
-            "and measurements below. Do not invent facts about the song. Write "
-            "1–2 sentences, warm and concrete.\n\n"
+            "and measurements below. Do not invent facts about the song.\n\n"
+            "Write TWO explanations:\n"
+            "SIMPLE: one warm, plain-language sentence anyone can understand. "
+            "Describe how the song FEELS (gentle, upbeat, slow, tense, bright, "
+            "mellow…) and why that suits the mood. Do NOT use numbers or the words "
+            "'valence', 'tempo', 'energy', or 'arousal'.\n"
+            "TECHNICAL: one or two sentences grounded in the measurements, naming "
+            "the audio features and how they match the target.\n\n"
             f"MOOD: {info['emotion']}\n"
             f"SONG: '{track.title}' by {track.artist}\n"
             f"MEASUREMENTS: {deltas}\n"
-            f"CONTEXT:\n{context}\n\nExplanation:"
+            f"CONTEXT:\n{context}\n\n"
+            "Respond in EXACTLY this format:\n"
+            "SIMPLE: <one sentence>\n"
+            "TECHNICAL: <one or two sentences>"
         )
-        return self.llm_fn(prompt)  # type: ignore[misc]
+        raw = self.llm_fn(prompt)  # type: ignore[misc]
+        return self._split_two(raw)
+
+    @staticmethod
+    def _split_two(text: str) -> tuple[str, str]:
+        """Parse 'SIMPLE: … TECHNICAL: …' → (simple, technical), robust to drift."""
+        simple, technical = "", ""
+        if "TECHNICAL:" in text:
+            pre, tech = text.split("TECHNICAL:", 1)
+            technical = tech.strip()
+            simple = (pre.split("SIMPLE:", 1)[1] if "SIMPLE:" in pre else pre).strip()
+        else:
+            # No marker → treat the whole reply as the simple explanation.
+            simple = text.replace("SIMPLE:", "").strip()
+        if not simple:
+            simple = technical            # never leave the visible line empty
+        return simple, technical
 
     def _llm_summary(self, rec: Any) -> str:
         hits = self.retriever.query("why these songs mood energy arc order", k=self.k)

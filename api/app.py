@@ -47,9 +47,13 @@ from schemas import (                                         # noqa: E402
 
 
 def _build_service() -> AetherService:
-    # ── Swap this line to go live on the real store: ──
-    #   svc = AetherService.from_store_path("phase_2_music_data/store/music_store")
-    #   svc.attach_harmonic_index(build_sample_songs())   # or the real songs
+    # Point at the real 1.2M store by setting AETHER_STORE to its .npz path:
+    #   export AETHER_STORE=phase_2_music_data/store/music_store.npz
+    # Otherwise falls back to the in-memory sample catalog.
+    import os
+    store_path = os.getenv("AETHER_STORE")
+    if store_path:
+        return AetherService.from_store_path(store_path)
     return AetherService.from_sample()
 
 
@@ -78,6 +82,7 @@ def _track_out(t) -> TrackOut:
         source_emotion=t.source_emotion, energy=t.energy, valence=t.valence,
         tempo=t.tempo, match_score=t.match_score,
         why=(t.extra or {}).get("why"),
+        why_technical=(t.extra or {}).get("why_technical"),
     )
 
 
@@ -85,7 +90,7 @@ def _track_out(t) -> TrackOut:
 @app.get("/health", response_model=HealthResponse)
 def health():
     svc = _svc()
-    return HealthResponse(status="ok", tracks=len(svc.list_tracks()),
+    return HealthResponse(status="ok", tracks=len(svc.store),
                           llm="on" if svc.llm_fn else "off")
 
 
