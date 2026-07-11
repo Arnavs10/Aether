@@ -80,6 +80,21 @@ class HarmonicIndex:
         """Insert/replace a single profile (useful for freshness-layer tracks)."""
         self._by_id[profile.track_id] = profile
 
+    @classmethod
+    def load(cls, path: str) -> "HarmonicIndex":
+        """Load a prebuilt index (gzipped JSON: track_id → [camelot, bpm, energy])."""
+        import gzip
+        import json
+        idx = cls()
+        with gzip.open(path, "rt", encoding="utf-8") as f:
+            data = json.load(f)
+        for tid, rec in data.items():
+            cam, bpm, energy = rec
+            idx._by_id[str(tid)] = HarmonicProfile(
+                track_id=str(tid), camelot=cam,
+                bpm=float(bpm), energy=float(energy))
+        return idx
+
 
 # ─────────────────────────────────────────────────────────────
 # Self-test — tiny songs, no data files

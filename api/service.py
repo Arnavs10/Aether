@@ -119,7 +119,13 @@ class AetherService:
         """
         store = FeatureStore.load(path)
         fn = _load_llm() if llm_fn is True else (llm_fn or None)
-        return cls(store, harmonic_index=None, llm_fn=fn)
+        svc = cls(store, harmonic_index=None, llm_fn=fn)
+        # Auto-enable the live player if a prebuilt harmonic index is present.
+        hpath = _ROOT / "phase_7_drift_crossfade" / "harmonic_index.json.gz"
+        if hpath.exists():
+            svc.harmonic = HarmonicIndex.load(str(hpath))
+            svc._selector = TransitionSelector(store, svc.harmonic)
+        return svc
 
     def attach_harmonic_index(self, songs: list[Song]) -> None:
         """Enable the live player on a store loaded from disk."""
