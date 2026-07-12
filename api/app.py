@@ -27,7 +27,7 @@ from __future__ import annotations
 
 import sys
 from contextlib import asynccontextmanager
-from pathlib import Path
+from pathlib import Path         
 
 _ROOT = Path(__file__).resolve().parent.parent
 _HERE = Path(__file__).resolve().parent
@@ -44,6 +44,9 @@ from schemas import (                                         # noqa: E402
     LiveStartRequest, LiveStartResponse, LiveObserveRequest,
     LiveObserveResponse, TrackOut, TrackListItem, HealthResponse,
 )
+from voice_routes import router as voice_router
+from fastapi.middleware.cors import CORSMiddleware   # noqa: E402
+from web_routes import router as web_router          # noqa: E402
 
 
 def _build_service() -> AetherService:
@@ -68,6 +71,16 @@ app = FastAPI(
     version="1.0.0",
     description="Emotion-aware music intelligence — curate, journey, live.",
     lifespan=lifespan,
+)
+app.include_router(voice_router)
+app.include_router(web_router)        # ← new
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],              # dev: any origin. tighten to your deployed URL later.
+    allow_credentials=False,
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
 
 
