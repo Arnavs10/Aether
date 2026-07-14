@@ -13,3 +13,7 @@ tracks_features.csv
 *.ckpt
 *.npz
 phase_7_drift_crossfade/harmonic_index.json.gz
+
+# Runtime data files (user-generated state — never commit)
+api/contact_submissions.jsonl
+api/feeling_feed.json
