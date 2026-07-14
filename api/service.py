@@ -214,7 +214,11 @@ class AetherService:
         return self._sessions.pop(session_id, None) is not None
 
     # ── catalog ──
-    def list_tracks(self) -> list[dict]:
+    def list_tracks(self, limit: int = 50) -> list[dict]:
+        # Real-store path: _songs is empty (store loaded from .npz), so read a
+        # capped sample straight from the store's parallel arrays.
+        if not self._songs:
+            return self._list_from_store(limit)
         out = []
         for tid, s in self._songs.items():
             prof = self.harmonic.get(tid) if self.harmonic else None
@@ -225,6 +229,23 @@ class AetherService:
             })
         return out
 
+    def _list_from_store(self, limit: int = 50) -> list[dict]:
+        """Sample `limit` random tracks from the loaded FeatureStore."""
+        total = len(self.store)
+        n = min(limit, total)
+        idxs = np.random.choice(total, size=n, replace=False)   # random, varied artists
+        out = []
+        for i in idxs:
+            tid = str(self.store.track_ids[i])
+            prof = self.harmonic.get(tid) if self.harmonic else None
+            out.append({
+                "track_id": tid,
+                "name": str(self.store.names[i]),
+                "artist": str(self.store.artists[i]),
+                "camelot": prof.camelot if prof else None,
+                "bpm": prof.bpm if prof else None,
+            })
+        return out
 
 if __name__ == "__main__":
     svc = AetherService.from_sample(llm_fn=None)   # offline (no LLM) for the smoke test
