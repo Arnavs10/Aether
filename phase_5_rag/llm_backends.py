@@ -158,7 +158,7 @@ def groq_llm(
             "groq_llm needs the `groq` SDK: pip install groq"
         ) from exc
 
-    model = model or os.getenv("GROQ_MODEL") or "llama-3.3-70b-versatile"
+    model = model or os.getenv("GROQ_MODEL") or "openai/gpt-oss-120b"
 
     key = api_key or os.getenv("GROQ_API_KEY")
     if not key:

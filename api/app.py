@@ -47,6 +47,7 @@ from schemas import (                                         # noqa: E402
 from voice_routes import router as voice_router
 from fastapi.middleware.cors import CORSMiddleware   # noqa: E402
 from web_routes import router as web_router          # noqa: E402
+from chat_routes import router as chat_router     # noqa: E40
 
 
 def _build_service() -> AetherService:
@@ -73,7 +74,8 @@ app = FastAPI(
     lifespan=lifespan,
 )
 app.include_router(voice_router)
-app.include_router(web_router)        # ← new
+app.include_router(web_router)# ← new
+app.include_router(chat_router)
 
 app.add_middleware(
     CORSMiddleware,
