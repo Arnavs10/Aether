@@ -17,3 +17,13 @@ phase_7_drift_crossfade/harmonic_index.json.gz
 # Runtime data files (user-generated state — never commit)
 api/contact_submissions.jsonl
 api/feeling_feed.json
+
+# Frontend build artifacts
+node_modules/
+dist/
+.env
+
+# Local archives and backups (git is the backup)
+*.zip
+phase_8_website/frontend_src_backup_pass2/
+phase_8_website/backend/
