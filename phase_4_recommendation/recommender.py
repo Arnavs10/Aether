@@ -83,16 +83,29 @@ class AetherRecommender:
         self,
         generator: PlaylistGenerator,
         provider: Optional[MusicProvider] = None,
+        freshness_ratio: float = 0.0,
+        year_min: Optional[int] = None,
+        year_max: Optional[int] = None,
     ):
         """
         Args:
             generator: a ready Phase 3 PlaylistGenerator (holds the FeatureStore).
             provider:  delivery provider for enrichment/export. Defaults to
                        NullProvider (pure offline — no network).
+            freshness_ratio / year_min / year_max: instance-level delivery policy,
+                       applied to every recommend() call that does not override it.
+                       Set once here so every caller inherits one policy — including
+                       the Phase 6 agent, which reaches recommend() through
+                       AetherTools and cannot forward arguments of its own.
+                       The defaults preserve the pure-offline contract: no network,
+                       no freshness, no year filter.
         """
         self.generator = generator
         self.store: FeatureStore = generator.store
         self.provider: MusicProvider = provider or NullProvider()
+        self.default_freshness_ratio = float(freshness_ratio)
+        self.default_year_min = year_min
+        self.default_year_max = year_max
         # track_id → normalized 6-dim match vector, for feature re-hydration.
         self._feature_index = self._build_feature_index(self.store)
 
@@ -150,7 +163,8 @@ class AetherRecommender:
         year_max: Optional[int] = None,
         arc: Optional[str] = None,
         space_artists: bool = True,
-        freshness_ratio: float = 0.0,
+        freshness_ratio: Optional[float] = None,
+        market: Optional[str] = None,
     ) -> Recommendation:
         """
         Produce a finished recommendation from a fused emotion distribution.
@@ -178,6 +192,17 @@ class AetherRecommender:
             InvalidRequestError: on a malformed distribution / raw_text.
             Phase3ContractError: if the Phase 3 generate() call fails.
         """
+        # 0. Fall back to the instance delivery policy for anything the caller
+        #    left open. None means "no preference", so the policy set at
+        #    construction applies. This is what lets the Phase 6 agent inherit
+        #    the same behaviour as curate() without forwarding any arguments.
+        if year_min is None:
+            year_min = self.default_year_min
+        if year_max is None:
+            year_max = self.default_year_max
+        if freshness_ratio is None:
+            freshness_ratio = self.default_freshness_ratio
+
         # 1. Validate the request.
         dist = np.asarray(distribution, dtype=np.float64).flatten()
         if AETHER_EMOTIONS and dist.size != len(AETHER_EMOTIONS):
@@ -201,19 +226,17 @@ class AetherRecommender:
         # 3. Normalize + re-hydrate features → Phase 4 Tracks (store picks).
         store_tracks = [self._to_track(ms) for ms in pr.songs]
 
-        # 4. Hybrid-C freshness: fetch current-catalog tracks for the dominant
-        #    emotion and reserve room for them (0 fresh if ratio<=0 or provider
-        #    can't discover — e.g. NullProvider).
+        # 4. Hybrid-C freshness: fetch current-catalog tracks for the request's
+        #    emotions and reserve room for them (0 fresh if ratio<=0 or the
+        #    provider can't discover — e.g. NullProvider).
         dominant = pr.emotions[0] if pr.emotions else "calm"
         ratio = float(np.clip(freshness_ratio, 0.0, 1.0))
         fresh_tracks: list[Track] = []
         if ratio > 0.0:
             n_fresh = min(int(round(length * ratio)), max(0, length - 1))
             if n_fresh > 0:
-                try:
-                    fresh_tracks = self.provider.discover(dominant, n_fresh)[:n_fresh]
-                except Exception:
-                    fresh_tracks = []  # freshness is best-effort; never break core
+                fresh_tracks = self._discover_blend(
+                    list(pr.emotions), list(pr.weights), n_fresh, market=market)
                 if fresh_tracks:
                     store_tracks = store_tracks[: length - len(fresh_tracks)]
 
@@ -243,6 +266,78 @@ class AetherRecommender:
             arc_shape=shape,
             reason=reason,
         )
+
+    def _discover_blend(
+        self, emotions: list[str], weights: list[float], n_fresh: int,
+        market: Optional[str] = None,
+    ) -> list[Track]:
+        """Source `n_fresh` current-catalog tracks across the WHOLE blend.
+
+        Phase 3 honours every emotion in a request; the delivery layer should
+        too. Querying only the dominant emotion would collapse "nostalgic +
+        hopeful" into one mood on the fresh side while the store side still
+        served both — the two halves of the playlist would disagree.
+
+        Each emotion gets a share of the quota proportional to its weight, with
+        a floor of one so a present emotion is never mute. Results are
+        de-duplicated across emotions.
+
+        Best-effort by contract: a provider failure yields fewer fresh tracks,
+        never an exception. The store picks always stand on their own.
+
+        Args:
+            emotions: ranked emotions from Phase 3 (strongest first).
+            weights:  their weights, index-aligned to `emotions`.
+            n_fresh:  total number of fresh tracks wanted.
+
+        Returns:
+            Up to `n_fresh` Tracks; possibly fewer, possibly none.
+        """
+        if not emotions:
+            emotions, weights = ["calm"], [1.0]
+
+        # A blend past 3 emotions is noise, and we can never use more distinct
+        # emotions than we have slots — querying a 4th when n_fresh is 2 would
+        # spend a rate-limited request on a result we would immediately discard.
+        top = emotions[:max(1, min(3, n_fresh))]
+        wts = [float(w) for w in weights[:len(top)]]
+        if not wts:
+            wts = [1.0] * len(top)
+        total = sum(wts) or 1.0
+
+        # Proportional quota with a floor of 1, trimmed back to n_fresh.
+        quotas = [max(1, int(round(n_fresh * (w / total)))) for w in wts]
+        while sum(quotas) > n_fresh and max(quotas) > 1:
+            quotas[quotas.index(max(quotas))] -= 1
+
+        out: list[Track] = []
+        seen: set[str] = set()
+        for emo, quota in zip(top, quotas):
+            if quota <= 0 or len(out) >= n_fresh:
+                continue
+            try:
+                # `market` is an optional extension: the MusicProvider ABC only
+                # promises discover(emotion, limit). Providers that don't know
+                # about markets (NullProvider, Deezer) still work unchanged.
+                if market:
+                    try:
+                        found = self.provider.discover(emo, quota, market=market)
+                    except TypeError:
+                        found = self.provider.discover(emo, quota)
+                else:
+                    found = self.provider.discover(emo, quota)
+            except Exception as exc:  # noqa: BLE001
+                print(f"[freshness] discover({emo!r}) failed: {exc!r}")
+                continue
+            for t in found:
+                tid = t.track_id or ""
+                if tid and tid in seen:
+                    continue
+                seen.add(tid)
+                out.append(t)
+                if len(out) >= n_fresh:
+                    break
+        return out[:n_fresh]
 
     @staticmethod
     def _weave(primary: list[Track], extra: list[Track]) -> list[Track]:

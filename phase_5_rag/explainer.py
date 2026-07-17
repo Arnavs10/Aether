@@ -361,19 +361,29 @@ class LLMExplainer(Explainer):
                 used[h.doc.doc_id] = h.doc.title
             try:
                 why_simple, why_tech = self._llm_track(tr, info)
+                if not why_simple.strip():
+                    # An empty reply is a failure, not an answer. Without this the
+                    # try/except below never fires (no exception was raised) and the
+                    # track ships with why="" — a blank box instead of a fallback.
+                    raise ValueError("llm returned no explanation")
                 cites = [h.doc.doc_id for h in info["hits"][:2]]
                 track_expls.append(TrackExplanation(
                     title=tr.title, artist=tr.artist, emotion=info["emotion"],
                     why=why_simple.strip(), why_technical=why_tech.strip(),
                     citations=cites, feature_notes=info["deltas"],
                 ))
-            except Exception:
+            except Exception as exc:  # noqa: BLE001
                 # Any LLM failure → deterministic grounded fallback for this track.
+                print(f"  [rag] llm explanation failed for {tr.title!r} "
+                      f"({exc}); using grounded template.")
                 track_expls.append(self._fallback._compose_track(tr, info))
 
         try:
             summary = self._llm_summary(recommendation)
-        except Exception:
+            if not summary.strip():
+                raise ValueError("llm returned no summary")
+        except Exception as exc:  # noqa: BLE001
+            print(f"  [rag] llm summary failed ({exc}); using grounded template.")
             summary = self._fallback._compose_summary(recommendation, used)
 
         citations = [{"id": did, "title": title} for did, title in used.items()]

@@ -27,3 +27,8 @@ dist/
 *.zip
 phase_8_website/frontend_src_backup_pass2/
 phase_8_website/backend/
+
+# secrets + runtime state — never commit
+.env.sh
+api/contact_submissions.jsonl
+api/feeling_feed.json

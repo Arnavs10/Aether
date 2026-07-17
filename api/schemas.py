@@ -17,6 +17,24 @@ from pydantic import BaseModel, Field
 
 # ── shared ──
 class TrackOut(BaseModel):
+    """One track as the API serves it.
+
+    Two kinds of track come through here and the client must be able to tell
+    them apart without guessing:
+
+      • store picks  — cosine-matched from the 1.2M feature store. `track_id` is
+        the store's own id, and energy/valence/tempo/match_score are populated.
+      • fresh picks  — sourced live from Apple's current catalog by the freshness
+        layer. `track_id` is prefixed "itunes:", and the audio features are None
+        because Apple does not publish them.
+
+    The playable fields below are flattened out of the provider layer's
+    `provider_ref`. They are populated whenever the server has already resolved
+    the track, which lets the client render artwork and a preview immediately
+    instead of re-searching iTunes for a song the server just looked up.
+    They are Optional throughout: a client that ignores them still works.
+    """
+
     rank: int
     track_id: str
     title: str
@@ -28,6 +46,13 @@ class TrackOut(BaseModel):
     match_score: Optional[float] = None
     why: Optional[str] = None
     why_technical: Optional[str] = None
+
+    # ── delivery layer (already resolved server-side; skip the client resolver) ──
+    year: Optional[int] = None
+    preview_url: Optional[str] = None       # 30s preview
+    cover: Optional[str] = None             # 600x600 artwork
+    link: Optional[str] = None              # open on Apple Music
+    album: Optional[str] = None
 
 
 # ── curate (main feature) ──

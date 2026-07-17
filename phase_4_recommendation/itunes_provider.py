@@ -38,6 +38,7 @@ Notes
 from __future__ import annotations
 
 import json
+import random
 import urllib.parse
 import urllib.request
 from typing import Any, Callable, Optional
@@ -49,26 +50,140 @@ _API_BASE = "https://itunes.apple.com/search"
 
 
 # ──────────────────────────────────────────────
-# Emotion → iTunes mood query (freshness layer)
-# Keywords follow the music-style hints in config.AETHER_EMOTIONS.
+# Freshness sampling
 # ──────────────────────────────────────────────
+# iTunes Search caps a single response at 200 results.
+_ITUNES_MAX_LIMIT = 200
+# How much wider than the request to fetch before sampling. iTunes ranking is
+# deterministic, so asking for exactly N returns the same N every time. Pulling
+# a wider pool from the SAME mood query and sampling it keeps two curates of one
+# mood from being twins, without ever leaving that mood.
+_POOL_FACTOR = 5
+
+
+# ──────────────────────────────────────────────
+# Emotion → iTunes mood query (freshness layer)
+# ──────────────────────────────────────────────
+# iTunes Search ranks on keyword relevance to track metadata. There is no
+# recency sort and no popularity sort in the API, so THE QUERY IS THE RANKING.
+#
+# That makes the phrasing load-bearing, in a way worth stating plainly:
+#
+#   "throwback retro hits"  → Madonna, Marvin Gaye, Eurythmics, Britney Spears.
+#   "edm dance workout"     → "EDM Dance Workout" by Dance Fitness.
+#
+# The difference is who applies the words. "Throwback" and "retro" are curatorial
+# words that sit on compilations OF famous songs, so the query lands on real
+# music. "Edm dance workout" is a phrase people type into a search box, so
+# royalty-free uploaders name tracks exactly that to intercept it, and they bury
+# everything real.
+#
+# So the rule for these terms: use words that describe what the music IS
+# (genre, style, era) and that appear in the metadata of real commercial
+# releases. Avoid phrases that read like a search query. Where a phrase is
+# already proven to land on famous catalogue, keep it exactly as it is.
 EMOTION_MOOD_QUERIES: dict[str, str] = {
-    "happy":       "feel good upbeat pop",
-    "sad":         "sad slow ballad",
-    "angry":       "aggressive heavy rock",
-    "calm":        "calm ambient chill",
-    "anxious":     "tense dark cinematic",
-    "energetic":   "edm dance workout",
-    "focused":     "lofi study instrumental",
-    "nostalgic":   "throwback retro hits",
-    "romantic":    "romantic love songs",
-    "melancholic": "melancholic indie",
-    "confident":   "empowering hype anthem",
-    "hopeful":     "uplifting inspiring",
-    "frustrated":  "punk hard rock",
-    "lonely":      "lonely sad acoustic",
-    "dreamy":      "dream pop ethereal",
+    "happy":       "pop hits",
+    "sad":         "ballads",
+    "angry":       "rock",
+    "calm":        "ambient",
+    "anxious":     "alternative",
+    "energetic":   "dance hits",
+    "focused":     "instrumental",
+    "nostalgic":   "throwback retro hits",   # proven: keep verbatim
+    "romantic":    "love songs",
+    "melancholic": "indie",
+    "confident":   "hip hop",
+    "hopeful":     "indie pop",
+    "frustrated":  "punk",
+    "lonely":      "acoustic",
+    "dreamy":      "dream pop",
 }
+
+
+# ──────────────────────────────────────────────
+# Language / market support
+# ──────────────────────────────────────────────
+# A listener asking for Hindi songs is asking for a different CATALOGUE, not a
+# different mood. iTunes exposes that as the storefront (`country`), so the
+# market rides alongside the emotion rather than replacing it: the store still
+# decides how the listener feels, and the market decides which catalogue answers.
+#
+# Each market carries its own qualifier because a storefront alone is not enough:
+# the India storefront serves plenty of English pop, so "bollywood" is what makes
+# a Hindi request return Hindi music.
+MARKETS: dict[str, dict[str, str]] = {
+    "hindi":    {"country": "IN", "qualifier": "bollywood hindi"},
+    "punjabi":  {"country": "IN", "qualifier": "punjabi"},
+    "tamil":    {"country": "IN", "qualifier": "tamil"},
+    "telugu":   {"country": "IN", "qualifier": "telugu"},
+    "korean":   {"country": "KR", "qualifier": "k-pop korean"},
+    "japanese": {"country": "JP", "qualifier": "j-pop japanese"},
+    "spanish":  {"country": "ES", "qualifier": "latin spanish"},
+    "french":   {"country": "FR", "qualifier": "french"},
+    "english":  {"country": "US", "qualifier": ""},
+}
+
+# What a listener might type → market key. Checked against the raw request text.
+MARKET_HINTS: dict[str, str] = {
+    "hindi": "hindi", "bollywood": "hindi", "desi": "hindi",
+    "punjabi": "punjabi", "bhangra": "punjabi",
+    "tamil": "tamil", "kollywood": "tamil",
+    "telugu": "telugu", "tollywood": "telugu",
+    "korean": "korean", "k-pop": "korean", "kpop": "korean",
+    "japanese": "japanese", "j-pop": "japanese", "jpop": "japanese", "anime": "japanese",
+    "spanish": "spanish", "latino": "spanish", "reggaeton": "spanish",
+    "french": "french",
+    "english": "english",
+}
+
+
+def detect_market(text: Optional[str]) -> Optional[str]:
+    """Find a language/market request in a listener's own words.
+
+    Returns a key of MARKETS, or None when no language was asked for (in which
+    case the provider's configured storefront applies, and nothing changes).
+
+    Deliberately a keyword match rather than language detection: the request is
+    "give me Hindi songs", typically written IN English, so detecting the
+    language of the sentence would answer the wrong question.
+
+    Args:
+        text: the listener's raw request, or None.
+
+    Returns:
+        A market key such as "hindi", or None.
+    """
+    if not text:
+        return None
+    low = f" {text.lower()} "
+    for hint, market in MARKET_HINTS.items():
+        if hint in low:
+            return market
+    return None
+
+
+def _is_search_bait(raw: dict, term_words: set[str]) -> bool:
+    """True if a result was named to intercept the query rather than to be a song.
+
+    Because iTunes ranks on metadata relevance, a track titled "EDM Dance
+    Workout" wins the query "edm dance workout" outright, ahead of anything a
+    listener would recognise. These are royalty-free and compilation uploads.
+
+    The tell is that the title echoes the query back. Real songs rarely carry two
+    or more of a mood query's words in their title; bait almost always does.
+
+    Args:
+        raw: one iTunes search result.
+        term_words: the query's significant words, lowercased.
+
+    Returns:
+        True if the result should be dropped.
+    """
+    title = (raw.get("trackName") or "").lower()
+    if not title or len(term_words) < 2:
+        return False
+    return sum(1 for w in term_words if w in title) >= 2
 
 
 def _default_http_get(url: str, timeout: float = 10.0) -> dict[str, Any]:
@@ -103,11 +218,18 @@ class ITunesProvider(MusicProvider):
         self.country = country
 
     # ── low-level search ──
-    def _search(self, term: str, limit: int) -> list[dict]:
-        """Run an iTunes song search; return the raw result dicts (best first)."""
+    def _search(self, term: str, limit: int,
+                country: Optional[str] = None) -> list[dict]:
+        """Run an iTunes song search; return the raw result dicts (best first).
+
+        Args:
+            term: the search term.
+            limit: how many results to ask for (iTunes caps at 200).
+            country: storefront override, e.g. "IN". Defaults to the provider's.
+        """
         params = urllib.parse.urlencode({
             "term": term, "media": "music", "entity": "song",
-            "limit": max(1, limit), "country": self.country,
+            "limit": max(1, limit), "country": country or self.country,
         })
         url = f"{_API_BASE}?{params}"
         try:
@@ -156,14 +278,57 @@ class ITunesProvider(MusicProvider):
                 t.provider_ref = self._raw_to_track(results[0]).provider_ref
         return tracks
 
-    def discover(self, emotion: str, limit: int) -> list[Track]:
-        """Fetch fresh current-catalog tracks for an emotion (freshness layer)."""
+    def discover(self, emotion: str, limit: int,
+                 market: Optional[str] = None) -> list[Track]:
+        """Fetch fresh current-catalog tracks for an emotion (freshness layer).
+
+        Three things happen here, each fixing a specific way iTunes Search
+        misbehaves when you use it as a discovery engine:
+
+        1. Market. If the listener asked for a language, search that storefront
+           with that language's qualifier. The emotion is unchanged: the store
+           still decided how they feel, this only decides which catalogue answers.
+        2. Over-fetch. iTunes ranking is deterministic, so asking for exactly
+           `limit` returns the same tracks on every identical call, and two
+           curates of one mood come back twins. Pull a wider pool from the same
+           query and sample it: variety without leaving the mood.
+        3. Bait filter. Drop results named to intercept the query (see
+           _is_search_bait). Without this, "dance" returns "Dance Workout Hits"
+           by a compilation account instead of music anyone knows.
+
+        Args:
+            emotion: one of the 15 Aether emotions.
+            limit: how many tracks to return.
+            market: optional key of MARKETS ("hindi", "korean", …).
+
+        Returns:
+            Up to `limit` playable Tracks. Empty on any provider failure —
+            freshness is best-effort and never breaks the core recommendation.
+        """
         if limit <= 0:
             return []
+
         term = EMOTION_MOOD_QUERIES.get(emotion, emotion)
-        raws = self._search(term, limit)
-        tracks = [self._raw_to_track(r, source_emotion=emotion) for r in raws]
-        return tracks[:limit]
+        country = self.country
+        if market and market in MARKETS:
+            cfg = MARKETS[market]
+            country = cfg["country"]
+            if cfg["qualifier"]:
+                term = f"{cfg['qualifier']} {term}"
+
+        pool_size = min(max(limit * _POOL_FACTOR, limit), _ITUNES_MAX_LIMIT)
+        raws = self._search(term, pool_size, country=country)
+        if not raws:
+            print(f"[freshness] iTunes returned nothing for {emotion!r} "
+                  f"({term!r}, {country}).")
+            return []
+
+        term_words = {w for w in term.lower().split() if len(w) > 2}
+        clean = [r for r in raws if not _is_search_bait(r, term_words)]
+        if len(clean) < limit:
+            clean = raws          # filter too aggressive here; relevance wins
+        picks = random.sample(clean, limit) if len(clean) > limit else list(clean)
+        return [self._raw_to_track(r, source_emotion=emotion) for r in picks]
 
     def export_playlist(self, tracks: list[Track], name: str) -> dict:
         """

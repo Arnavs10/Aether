@@ -217,11 +217,18 @@ def _groq_reply(system: str, history: list[dict], user: str) -> Optional[str]:
             msgs.append({"role": role, "content": str(h.get("content", ""))[:1500]})
         msgs.append({"role": "user", "content": user})
 
+        # The default model is a REASONING model: it spends completion tokens
+        # thinking before it writes, and `content` only appears once that ends.
+        # So the budget must cover reasoning AND the answer, and reasoning_effort
+        # keeps it from over-thinking a chat reply. Sized too small, the API
+        # returns 200 with an EMPTY content and finish_reason "length" — no error,
+        # just silence, which then looks like the whole chatbot is dead.
         payload = json.dumps({
             "model": model,
             "messages": msgs,
             "temperature": 0.6,
-            "max_tokens": 1024,
+            "max_completion_tokens": 2048,   # max_tokens is deprecated
+            "reasoning_effort": "low",       # ignored by non-reasoning models
         }).encode()
         req = urllib.request.Request(
             "https://api.groq.com/openai/v1/chat/completions",
@@ -235,9 +242,14 @@ def _groq_reply(system: str, history: list[dict], user: str) -> Optional[str]:
         with urllib.request.urlopen(req, timeout=30) as r:  # noqa: S310
             data = json.loads(r.read())
 
-        content = (data["choices"][0]["message"].get("content") or "").strip()
+        choice = data["choices"][0]
+        content = (choice["message"].get("content") or "").strip()
         if not content:
-            print(f"[chat] Groq returned empty content (model={model}).")
+            finish = choice.get("finish_reason", "?")
+            reasoning = choice["message"].get("reasoning") or ""
+            print(f"[chat] Groq returned empty content (model={model}, "
+                  f"finish_reason={finish}, reasoning_chars={len(reasoning)}). "
+                  f"finish_reason='length' means the budget went on reasoning.")
             return None
         return content
 

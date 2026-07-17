@@ -44,6 +44,7 @@ from schema import Song                                       # Phase 2  # noqa:
 from feature_store import FeatureStore                        # Phase 2  # noqa: E402
 from playlist import PlaylistGenerator                        # Phase 3  # noqa: E402
 from recommender import AetherRecommender                     # Phase 4  # noqa: E402
+from itunes_provider import ITunesProvider, detect_market     # Phase 4  # noqa: E402
 from rag import AetherExplainer                               # Phase 5  # noqa: E402
 from tools import AetherTools                                 # Phase 6  # noqa: E402
 from agent import AetherAgent                                 # Phase 6  # noqa: E402
@@ -52,6 +53,43 @@ from drift import EmotionDriftDetector                        # Phase 7  # noqa:
 from transition import TransitionSelector                     # Phase 7  # noqa: E402
 from crossfade import CrossfadePlanner                        # Phase 7  # noqa: E402
 from engine import LiveTransitionEngine                       # Phase 7  # noqa: E402
+
+
+def _delivery_policy() -> tuple[float, Optional[int]]:
+    """Read the delivery policy from the environment (tune without a code edit).
+
+    The recommendation *brain* is provider-agnostic, but how a finished playlist
+    is sourced is an operational choice, not an algorithmic one. Keeping it in
+    the environment means the blend is tuned by restarting, not by editing.
+
+        AETHER_FRESHNESS  0..1 — share of a playlist sourced live from Apple's
+                          current catalog via the provider's discover().
+                          Default 0.7 → 7 of every 10 tracks are current catalog;
+                          the other 3 are cosine-matched store picks that carry
+                          the match score, audio features, reasoning and live-mix.
+        AETHER_YEAR_MIN   int  — oldest release year the LOCAL STORE may return.
+                          Default 2015. Does not touch the fresh side: Apple has
+                          no year filter and returns current catalog regardless.
+                          Set it empty to disable the filter entirely.
+
+    Returns:
+        (freshness_ratio, year_min). The ratio is clamped to [0, 1]; year_min is
+        None when unset or unparseable (fail open, never filter by accident).
+    """
+    try:
+        ratio = float(os.getenv("AETHER_FRESHNESS", "0.7"))
+    except ValueError:
+        print("[policy] AETHER_FRESHNESS is not a number; falling back to 0.7.")
+        ratio = 0.7
+
+    raw = os.getenv("AETHER_YEAR_MIN", "2015").strip()
+    try:
+        year_min: Optional[int] = int(raw) if raw else None
+    except ValueError:
+        print(f"[policy] AETHER_YEAR_MIN={raw!r} is not an int; filter disabled.")
+        year_min = None
+
+    return max(0.0, min(ratio, 1.0)), year_min
 
 
 def _load_llm() -> Optional[Callable[[str], str]]:
@@ -74,14 +112,28 @@ class AetherService:
         harmonic_index: Optional[HarmonicIndex] = None,
         llm_fn: Optional[Callable[[str], str]] = None,
         songs: Optional[list[Song]] = None,
+        provider: Optional[object] = None,
+        freshness_ratio: float = 0.0,
+        year_min: Optional[int] = None,
     ) -> None:
         self.store = store
         self.harmonic = harmonic_index
         self.llm_fn = llm_fn
         self._songs = {s.track_id: s for s in (songs or [])}
+        self.year_min = year_min
 
-        # Phase 3/4 — matching + recommendation
-        self.recommender = AetherRecommender(PlaylistGenerator(store))
+        # Phase 3/4 — matching + recommendation.
+        # The delivery policy is set on the recommender itself rather than passed
+        # per call, because Phase 6's agent reaches recommend() through
+        # AetherTools and cannot forward arguments. One policy, every caller.
+        # Defaults keep the pure-offline contract: NullProvider, no freshness,
+        # no year filter — which is exactly what from_sample() and pytest want.
+        self.recommender = AetherRecommender(
+            PlaylistGenerator(store),
+            provider=provider,
+            freshness_ratio=freshness_ratio,
+            year_min=year_min,
+        )
         # Phase 5 — RAG explainer (TF-IDF retrieval for fast startup)
         self.explainer = AetherExplainer.default(prefer_chroma=False, llm_fn=llm_fn)
         # Phase 6 — agent over the same tools
@@ -119,7 +171,16 @@ class AetherService:
         """
         store = FeatureStore.load(path)
         fn = _load_llm() if llm_fn is True else (llm_fn or None)
-        svc = cls(store, harmonic_index=None, llm_fn=fn)
+        # The real store is the live path, so it gets the live delivery layer:
+        # iTunes for enrichment (artwork/preview/link) and for the freshness
+        # blend. from_sample() deliberately keeps NullProvider so tests stay
+        # offline and deterministic.
+        ratio, year_min = _delivery_policy()
+        svc = cls(store, harmonic_index=None, llm_fn=fn,
+                  provider=ITunesProvider(), freshness_ratio=ratio,
+                  year_min=year_min)
+        print(f"[policy] real store: freshness={ratio:.0%} "
+              f"year_min={year_min or 'off'} provider=iTunes")
         # Auto-enable the live player if a prebuilt harmonic index is present.
         hpath = _ROOT / "phase_7_drift_crossfade" / "harmonic_index.json.gz"
         if hpath.exists():
@@ -172,8 +233,14 @@ class AetherService:
     ):
         """Return an explained playlist for a mood (Phase 3/4 + Phase 5 RAG)."""
         dist, label = self._resolve_distribution(emotion, distribution, text)
+        # A language request ("give me hindi songs") is a catalogue choice, not an
+        # emotion. The store still decides how the listener feels; the market only
+        # decides which storefront the fresh half is sourced from.
+        market = detect_market(text)
+        if market:
+            print(f"[policy] market detected from request: {market}")
         rec = self.recommender.recommend(dist, raw_text=text or label,
-                                         length=length)
+                                         length=length, market=market)
         if explain:
             self.explainer.annotate(rec)      # folds 'why' into each track
         return rec
@@ -230,10 +297,27 @@ class AetherService:
         return out
 
     def _list_from_store(self, limit: int = 50) -> list[dict]:
-        """Sample `limit` random tracks from the loaded FeatureStore."""
+        """Sample `limit` random tracks from the loaded FeatureStore.
+
+        Honours the same year floor as the recommender, so the Live seed picker
+        offers tracks from the same era as the rest of the site. Live cannot use
+        the freshness layer at all — Apple publishes no key or tempo, so a fresh
+        track has no harmonic profile and nothing to mix on — which makes this
+        filter the only lever Live has.
+
+        Falls back to the full store if the filter is too narrow to fill the
+        request, so a tight year floor can never empty the seed picker.
+        """
         total = len(self.store)
-        n = min(limit, total)
-        idxs = np.random.choice(total, size=n, replace=False)   # random, varied artists
+        pool = np.arange(total)
+        years = getattr(self.store, "years", None)
+        if (self.year_min is not None and years is not None
+                and getattr(years, "size", 0) == total):
+            recent = np.flatnonzero(years >= self.year_min)
+            if recent.size >= limit:
+                pool = recent
+        n = min(limit, pool.size)
+        idxs = np.random.choice(pool, size=n, replace=False)    # random, varied artists
         out = []
         for i in idxs:
             tid = str(self.store.track_ids[i])

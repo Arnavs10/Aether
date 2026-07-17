@@ -92,12 +92,28 @@ def _svc() -> AetherService:
 
 # ── serializers ──
 def _track_out(t) -> TrackOut:
+    """Serialize a Phase 4 Track for the wire.
+
+    `provider_ref` is filled by the delivery layer (iTunes) during enrich() and
+    discover(), so by the time a track reaches here the artwork, preview and
+    store link have usually already been fetched. Flatten them out rather than
+    dropping them: otherwise the client re-searches iTunes for a song the server
+    just resolved, which is slow, wastes a rate-limited quota, and can resolve to
+    a different recording than the one we picked.
+    """
+    ref = t.provider_ref or {}
+    extra = t.extra or {}
     return TrackOut(
         rank=t.rank, track_id=t.track_id, title=t.title, artist=t.artist,
         source_emotion=t.source_emotion, energy=t.energy, valence=t.valence,
         tempo=t.tempo, match_score=t.match_score,
-        why=(t.extra or {}).get("why"),
-        why_technical=(t.extra or {}).get("why_technical"),
+        why=extra.get("why"),
+        why_technical=extra.get("why_technical"),
+        year=t.year,
+        preview_url=ref.get("preview_url"),
+        cover=ref.get("cover"),
+        link=ref.get("link"),
+        album=ref.get("album"),
     )
 
 

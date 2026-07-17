@@ -46,7 +46,7 @@ _HERE = Path(__file__).resolve().parent
 
 
 # ─────────────────────────────────────────────────────────── /contact ──
-CONTACT_TO = os.environ.get("CONTACT_TO", "arnavshuklaforbusiness@gmail.com")
+CONTACT_TO = os.environ.get("CONTACT_TO", "aether.official1010@gmail.com")
 _CONTACT_LOG = _HERE / "contact_submissions.jsonl"
 
 

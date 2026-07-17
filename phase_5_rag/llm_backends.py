@@ -140,16 +140,43 @@ def openai_llm(
 # ──────────────────────────────────────────────
 def groq_llm(
     model: str | None = None,          # override via arg or GROQ_MODEL
-    max_tokens: int = 256,
+    max_tokens: int = 2048,
     temperature: float = 0.4,
     api_key: str | None = None,
+    reasoning_effort: str | None = "low",
 ) -> LLMFn:
     """
     Build an `llm_fn` backed by Groq's free API (OpenAI-compatible).
 
-    Groq offers a genuine free tier with fast open models (Llama, etc.). Get a
-    key at https://console.groq.com/keys and export GROQ_API_KEY. If the default
-    model is retired, set GROQ_MODEL (see console.groq.com/docs/models).
+    Groq offers a genuine free tier with fast open models. Get a key at
+    https://console.groq.com/keys and export GROQ_API_KEY. If the default model
+    is retired, set GROQ_MODEL (see console.groq.com/docs/models).
+
+    On the token budget
+    -------------------
+    The default model is a REASONING model: it spends completion tokens thinking
+    before it writes anything, and `content` only appears once that finishes.
+    The budget therefore has to cover reasoning AND the answer. A budget sized
+    for the answer alone (the old 256) is silently consumed by reasoning on any
+    non-trivial prompt, and the API returns HTTP 200 with an EMPTY `content` and
+    `finish_reason: "length"`. No error, no exception, just nothing — which then
+    surfaces downstream as a blank explanation rather than a failure.
+
+    So: a budget with headroom, `reasoning_effort="low"` to stop the model
+    over-thinking a one-sentence job, and an explicit raise when content is
+    empty so callers can fall back deliberately instead of rendering "".
+
+    Args:
+        model: Groq model id. Falls back to $GROQ_MODEL, then a current default.
+        max_tokens: completion budget, covering reasoning + answer.
+        temperature: sampling temperature.
+        api_key: overrides $GROQ_API_KEY.
+        reasoning_effort: "low" | "medium" | "high", or None to omit. Ignored by
+            non-reasoning models, so it is safe to leave on.
+
+    Raises (at call time):
+        RuntimeError: the model returned no usable content. Callers treat this
+            as a failure and fall back; it is never rendered to a user.
     """
     try:
         from groq import Groq
@@ -170,12 +197,38 @@ def groq_llm(
     client = Groq(api_key=key)
 
     def _call(prompt: str) -> str:
-        resp = client.chat.completions.create(
-            model=model, max_tokens=max_tokens, temperature=temperature,
-            messages=[{"role": "system", "content": _SYSTEM},
-                      {"role": "user", "content": prompt}],
-        )
-        return (resp.choices[0].message.content or "").strip()
+        kwargs: dict = {
+            "model": model,
+            "temperature": temperature,
+            "max_completion_tokens": max_tokens,   # max_tokens is deprecated
+            "messages": [{"role": "system", "content": _SYSTEM},
+                         {"role": "user", "content": prompt}],
+        }
+        if reasoning_effort:
+            kwargs["reasoning_effort"] = reasoning_effort
+
+        try:
+            resp = client.chat.completions.create(**kwargs)
+        except TypeError:
+            # An older SDK may not know reasoning_effort / max_completion_tokens.
+            kwargs.pop("reasoning_effort", None)
+            kwargs["max_tokens"] = kwargs.pop("max_completion_tokens", max_tokens)
+            resp = client.chat.completions.create(**kwargs)
+
+        choice = resp.choices[0]
+        content = (choice.message.content or "").strip()
+        if content:
+            return content
+
+        # Empty content is a real failure, not an empty answer. Say so loudly and
+        # raise, so the caller's fallback fires instead of rendering a blank.
+        finish = getattr(choice, "finish_reason", "?")
+        reasoning = getattr(choice.message, "reasoning", None) or ""
+        print(f"[llm] groq returned empty content "
+              f"(model={model}, finish_reason={finish}, "
+              f"reasoning_chars={len(reasoning)}, budget={max_tokens}). "
+              f"If finish_reason is 'length', the budget was spent on reasoning.")
+        raise RuntimeError(f"groq returned no content (finish_reason={finish})")
 
     return _call
 def local_llm(
