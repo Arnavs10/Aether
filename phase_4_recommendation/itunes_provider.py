@@ -54,11 +54,23 @@ _API_BASE = "https://itunes.apple.com/search"
 # ──────────────────────────────────────────────
 # iTunes Search caps a single response at 200 results.
 _ITUNES_MAX_LIMIT = 200
-# How much wider than the request to fetch before sampling. iTunes ranking is
-# deterministic, so asking for exactly N returns the same N every time. Pulling
-# a wider pool from the SAME mood query and sampling it keeps two curates of one
-# mood from being twins, without ever leaving that mood.
-_POOL_FACTOR = 5
+# Pull a much wider pool than requested, then sample. iTunes ranking is
+# deterministic, so a narrow pool returns the same tracks every run and two
+# curates of one mood come back nearly identical. A wide pool + sampling is what
+# makes runs differ. Bigger is strictly better for variety here; the only cost
+# is a single larger HTTP response.
+_POOL_FACTOR = 20
+
+# Uploader/compilation tells. Because iTunes has no popularity sort, royalty-free
+# and library-music accounts rank alongside real releases for any genre keyword.
+# These substrings in an ARTIST name are near-certain junk and get dropped.
+_JUNK_ARTIST_MARKERS = (
+    "various artist", "compilation", "karaoke", "tribute", "cover band",
+    "workout", "fitness", "gym music", "study music", "lounge", "muzak",
+    "academy", "orchestra hits", "meditation", "lullaby", "sleep music",
+    "background music", "spa music", "cafe music", "elevator", "ringtone",
+    "instrumental version", "made famous", "in the style of", "as made popular",
+)
 
 
 # ──────────────────────────────────────────────
@@ -164,14 +176,19 @@ def detect_market(text: Optional[str]) -> Optional[str]:
 
 
 def _is_search_bait(raw: dict, term_words: set[str]) -> bool:
-    """True if a result was named to intercept the query rather than to be a song.
+    """True if a result is a keyword-farmed upload rather than a real release.
 
-    Because iTunes ranks on metadata relevance, a track titled "EDM Dance
-    Workout" wins the query "edm dance workout" outright, ahead of anything a
-    listener would recognise. These are royalty-free and compilation uploads.
+    Because iTunes ranks on metadata relevance with no popularity sort, two kinds
+    of junk rank alongside real music for any genre keyword:
 
-    The tell is that the title echoes the query back. Real songs rarely carry two
-    or more of a mood query's words in their title; bait almost always does.
+      • Title bait: a track literally titled "EDM Dance Workout" wins the query
+        "edm dance workout". The tell is the title echoing the query back — real
+        songs rarely carry two or more of a mood query's words in their title.
+      • Junk artists: royalty-free, karaoke, workout, lullaby and library-music
+        accounts. The tell is a known marker substring in the artist name.
+
+    Either tell drops the result. The caller falls back to the unfiltered pool if
+    filtering leaves too few, so this can never empty a playlist.
 
     Args:
         raw: one iTunes search result.
@@ -180,6 +197,10 @@ def _is_search_bait(raw: dict, term_words: set[str]) -> bool:
     Returns:
         True if the result should be dropped.
     """
+    artist = (raw.get("artistName") or "").lower()
+    if any(marker in artist for marker in _JUNK_ARTIST_MARKERS):
+        return True
+
     title = (raw.get("trackName") or "").lower()
     if not title or len(term_words) < 2:
         return False
@@ -279,27 +300,34 @@ class ITunesProvider(MusicProvider):
         return tracks
 
     def discover(self, emotion: str, limit: int,
-                 market: Optional[str] = None) -> list[Track]:
+                 market: Optional[str] = None,
+                 exclude_titles: Optional[set] = None) -> list[Track]:
         """Fetch fresh current-catalog tracks for an emotion (freshness layer).
 
-        Three things happen here, each fixing a specific way iTunes Search
-        misbehaves when you use it as a discovery engine:
+        Four things happen here, each fixing a way iTunes Search misbehaves when
+        used as a discovery engine:
 
         1. Market. If the listener asked for a language, search that storefront
            with that language's qualifier. The emotion is unchanged: the store
            still decided how they feel, this only decides which catalogue answers.
         2. Over-fetch. iTunes ranking is deterministic, so asking for exactly
            `limit` returns the same tracks on every identical call, and two
-           curates of one mood come back twins. Pull a wider pool from the same
-           query and sample it: variety without leaving the mood.
-        3. Bait filter. Drop results named to intercept the query (see
-           _is_search_bait). Without this, "dance" returns "Dance Workout Hits"
-           by a compilation account instead of music anyone knows.
+           curates of one mood come back twins. Pull a wide pool and sample it.
+        3. Junk filter. Drop keyword-farmed uploads and library-music artists
+           (see _is_search_bait), so "dance" returns music, not "Dance Workout
+           Hits" by a compilation account.
+        4. De-duplication. Skip anything whose "title — artist" is already in
+           `exclude_titles`, so a track never appears twice in one playlist,
+           whether it collided with the store half or with another emotion in
+           the same blend.
 
         Args:
             emotion: one of the 15 Aether emotions.
             limit: how many tracks to return.
             market: optional key of MARKETS ("hindi", "korean", …).
+            exclude_titles: lowercased "title — artist" keys already used. This
+                set is MUTATED as picks are chosen, so a caller can thread one set
+                through several discover() calls to keep the whole playlist unique.
 
         Returns:
             Up to `limit` playable Tracks. Empty on any provider failure —
@@ -307,6 +335,7 @@ class ITunesProvider(MusicProvider):
         """
         if limit <= 0:
             return []
+        seen_keys = exclude_titles if exclude_titles is not None else set()
 
         term = EMOTION_MOOD_QUERIES.get(emotion, emotion)
         country = self.country
@@ -327,8 +356,21 @@ class ITunesProvider(MusicProvider):
         clean = [r for r in raws if not _is_search_bait(r, term_words)]
         if len(clean) < limit:
             clean = raws          # filter too aggressive here; relevance wins
-        picks = random.sample(clean, limit) if len(clean) > limit else list(clean)
-        return [self._raw_to_track(r, source_emotion=emotion) for r in picks]
+
+        # Shuffle, then take the first `limit` that aren't already used. Shuffling
+        # (not sampling a fixed slice) is what makes repeated runs differ.
+        random.shuffle(clean)
+        out: list[Track] = []
+        for raw in clean:
+            key = f"{(raw.get('trackName') or '').lower()} — " \
+                  f"{(raw.get('artistName') or '').lower()}"
+            if key in seen_keys:
+                continue
+            seen_keys.add(key)
+            out.append(self._raw_to_track(raw, source_emotion=emotion))
+            if len(out) >= limit:
+                break
+        return out
 
     def export_playlist(self, tracks: list[Track], name: str) -> dict:
         """

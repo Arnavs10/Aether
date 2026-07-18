@@ -64,8 +64,34 @@ def _cached_get(url: str, headers: Optional[dict] = None, ttl: int = _CACHE_TTL)
 
 
 # ── free music context sources ───────────────────────────────────────────
-def _itunes_latest(limit: int = 8) -> str:
-    """Latest / most-popular songs via Apple's free RSS (no key)."""
+def _itunes_latest(limit: int = 12) -> str:
+    """The current Apple music chart, fetched live at request time (no key).
+
+    The model's training data ends in 2024, so any "what's popular now" question
+    has to be answered from data fetched right now, not from memory. This pulls
+    Apple's current most-played chart and hands it to the model as ground truth.
+    That is the honest ceiling on a free stack: real current CHART data, even
+    though the model itself has no 2026 facts.
+
+    Apple retired the old itunes.apple.com/rss generator; the live endpoint is
+    rss.applemarketingtools.com. Both are tried, newest first.
+    """
+    # Current generator (JSON shape: feed.results[]).
+    try:
+        url = (f"https://rss.applemarketingtools.com/api/v2/us/music/"
+               f"most-played/{limit}/songs.json")
+        data = json.loads(_cached_get(url))
+        results = data.get("feed", {}).get("results", [])
+        rows = [f"- {r.get('name')} — {r.get('artistName')}"
+                for r in results if r.get("name") and r.get("artistName")]
+        if rows:
+            return ("CURRENT MOST-PLAYED SONGS ON APPLE MUSIC (fetched live just "
+                    "now, this is today's chart):\n" + "\n".join(rows))
+        print("[chat] Apple chart (new): empty feed.")
+    except Exception as e:  # noqa: BLE001
+        print(f"[chat] Apple chart (new) failed: {e!r}")
+
+    # Legacy generator, in case the new one is unavailable.
     try:
         url = f"https://itunes.apple.com/us/rss/topsongs/limit={limit}/json"
         data = json.loads(_cached_get(url))
@@ -77,14 +103,15 @@ def _itunes_latest(limit: int = 8) -> str:
             if name and artist:
                 rows.append(f"- {name} — {artist}")
         if rows:
-            return "CURRENT TOP SONGS (Apple):\n" + "\n".join(rows)
-        print("[chat] iTunes RSS: empty feed.")
+            return ("CURRENT TOP SONGS ON APPLE (fetched live, today's chart):\n"
+                    + "\n".join(rows))
+        print("[chat] iTunes RSS (legacy): empty feed.")
         return ""
     except urllib.error.HTTPError as e:
-        print(f"[chat] iTunes RSS HTTP {e.code}.")
+        print(f"[chat] iTunes RSS (legacy) HTTP {e.code}.")
         return ""
     except Exception as e:  # noqa: BLE001
-        print(f"[chat] iTunes RSS failed: {e!r}")
+        print(f"[chat] iTunes RSS (legacy) failed: {e!r}")
         return ""
 
 
@@ -157,7 +184,12 @@ def _musicbrainz(query: str) -> str:
 
 def _needs_latest(text: str) -> bool:
     t = text.lower()
-    return any(k in t for k in ("latest", "new", "recent", "top", "chart", "trending", "this week", "2026"))
+    return any(k in t for k in (
+        "latest", "newest", "new release", "recent", "top", "popular", "trending",
+        "chart", "most streamed", "most played", "most listened", "biggest",
+        "this week", "this month", "right now", "these days", "currently", "nowadays",
+        "2025", "2026", "hot", "viral", "number one", "number 1", "#1", "billboard",
+    ))
 
 
 def _needs_facts(text: str) -> bool:
@@ -294,6 +326,22 @@ def chat(req: ChatRequest):
     context = "\n\n".join(b for b in context_bits if b)
 
     system = AETHER_KNOWLEDGE
+
+    # Two standing rules for every reply, independent of any live data below.
+    system += (
+        "\n\nTWO RULES FOR EVERY ANSWER:\n"
+        "1. NEVER mention a training cutoff, a 'knowledge date', or that your data "
+        "'only goes up to 2024'. It reads as broken. If you're asked about something "
+        "current and no live data is provided below, answer from what you know and "
+        "move on, or offer to pull the current chart — but never recite a cutoff year.\n"
+        "2. When asked how a feature works (Curate, Journey, Live), explain it in plain, "
+        "friendly language a non-technical listener understands: what it does for them "
+        "and, lightly, how it decides. NEVER expose implementation details — no model "
+        "names, no libraries, no vector or similarity search, no audio-feature vectors, "
+        "no BPM/key internals, no step-by-step architecture, no tables or numbered "
+        "pipelines. One warm short paragraph, not a technical breakdown."
+    )
+
     if context:
         system += (
             "\n\nThe live data below was fetched just now and is MORE CURRENT than your "
@@ -311,7 +359,7 @@ def chat(req: ChatRequest):
 
     # Fallback: no LLM key / call failed — still helpful for Aether/nav questions.
     fallback = (
-        "I'm Aether's assistant. I can explain the site — Curate turns your mood into an "
+        "I'm AetherBot, Aether's assistant. I can explain the site — Curate turns your mood into an "
         "explained playlist, Journey plans an emotional arc, and Live mixes songs as your "
         "mood drifts. No login needed. (My music-knowledge brain is offline right now, but "
         "the features all work — try the Curate page.)"

@@ -122,6 +122,17 @@ class AetherService:
         self._songs = {s.track_id: s for s in (songs or [])}
         self.year_min = year_min
 
+        # The per-track `why` explanation runs the LLM once for EVERY track of
+        # EVERY playlist, which is by far the biggest token consumer. On a free
+        # tier a handful of curates can exhaust the whole daily budget and then
+        # the chatbot (which genuinely needs a live model) stops working for
+        # everyone. AETHER_LLM_EXPLANATIONS=0 routes `why` to the grounded
+        # template instead: same facts, drawn from the track's real audio
+        # features, just steadier phrasing and zero tokens. The chatbot and the
+        # Journey summary keep the LLM. Defaults to on so tests are unaffected.
+        explain_with_llm = os.getenv("AETHER_LLM_EXPLANATIONS", "1") != "0"
+        explainer_llm = llm_fn if explain_with_llm else None
+
         # Phase 3/4 — matching + recommendation.
         # The delivery policy is set on the recommender itself rather than passed
         # per call, because Phase 6's agent reaches recommend() through
@@ -134,8 +145,10 @@ class AetherService:
             freshness_ratio=freshness_ratio,
             year_min=year_min,
         )
-        # Phase 5 — RAG explainer (TF-IDF retrieval for fast startup)
-        self.explainer = AetherExplainer.default(prefer_chroma=False, llm_fn=llm_fn)
+        # Phase 5 — RAG explainer (TF-IDF retrieval for fast startup).
+        # Uses explainer_llm (may be None to save tokens; see above).
+        self.explainer = AetherExplainer.default(
+            prefer_chroma=False, llm_fn=explainer_llm)
         # Phase 6 — agent over the same tools
         self.agent = AetherAgent(
             AetherTools(self.recommender, self.explainer), llm_fn=llm_fn)

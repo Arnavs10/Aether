@@ -235,8 +235,15 @@ class AetherRecommender:
         if ratio > 0.0:
             n_fresh = min(int(round(length * ratio)), max(0, length - 1))
             if n_fresh > 0:
+                # Seed the fresh de-dup set with the store picks' titles, so a
+                # fresh pick can never duplicate a track the store already chose.
+                store_keys = {
+                    f"{(t.title or '').lower()} — {(t.artist or '').lower()}"
+                    for t in store_tracks
+                }
                 fresh_tracks = self._discover_blend(
-                    list(pr.emotions), list(pr.weights), n_fresh, market=market)
+                    list(pr.emotions), list(pr.weights), n_fresh,
+                    market=market, exclude_keys=store_keys)
                 if fresh_tracks:
                     store_tracks = store_tracks[: length - len(fresh_tracks)]
 
@@ -269,7 +276,7 @@ class AetherRecommender:
 
     def _discover_blend(
         self, emotions: list[str], weights: list[float], n_fresh: int,
-        market: Optional[str] = None,
+        market: Optional[str] = None, exclude_keys: Optional[set] = None,
     ) -> list[Track]:
         """Source `n_fresh` current-catalog tracks across the WHOLE blend.
 
@@ -311,29 +318,35 @@ class AetherRecommender:
             quotas[quotas.index(max(quotas))] -= 1
 
         out: list[Track] = []
-        seen: set[str] = set()
+        # One title-key set, seeded from the store half and shared across every
+        # discover() call, so no fresh pick repeats a store pick OR another
+        # emotion's pick. Providers that don't support exclude_keys degrade to a
+        # local track_id check below.
+        title_keys: set[str] = set(exclude_keys or set())
+        seen_ids: set[str] = set()
         for emo, quota in zip(top, quotas):
             if quota <= 0 or len(out) >= n_fresh:
                 continue
             try:
-                # `market` is an optional extension: the MusicProvider ABC only
-                # promises discover(emotion, limit). Providers that don't know
-                # about markets (NullProvider, Deezer) still work unchanged.
+                # `market` and `exclude_titles` are optional extensions: the
+                # MusicProvider ABC only promises discover(emotion, limit).
+                # Providers that don't know them (NullProvider, Deezer) still work.
+                kwargs = {}
                 if market:
-                    try:
-                        found = self.provider.discover(emo, quota, market=market)
-                    except TypeError:
-                        found = self.provider.discover(emo, quota)
-                else:
+                    kwargs["market"] = market
+                kwargs["exclude_titles"] = title_keys
+                try:
+                    found = self.provider.discover(emo, quota, **kwargs)
+                except TypeError:
                     found = self.provider.discover(emo, quota)
             except Exception as exc:  # noqa: BLE001
                 print(f"[freshness] discover({emo!r}) failed: {exc!r}")
                 continue
             for t in found:
                 tid = t.track_id or ""
-                if tid and tid in seen:
+                if tid and tid in seen_ids:
                     continue
-                seen.add(tid)
+                seen_ids.add(tid)
                 out.append(t)
                 if len(out) >= n_fresh:
                     break
