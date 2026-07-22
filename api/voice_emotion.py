@@ -83,6 +83,19 @@ class VoiceEmotionEngine:
         self._status = "cold"       # cold | loading | ready | error
         self._error: Optional[str] = None
         self._lock = threading.Lock()
+        # Set when a load attempt finishes, whether it succeeded or failed.
+        # A request that arrives mid-load waits on this instead of running
+        # against half-built models (see _load).
+        self._loaded_evt = threading.Event()
+        # How long a caller will wait for an in-flight load before giving up.
+        # The first load pulls emotion2vec + Whisper and can take ~30s, or
+        # minutes on the very first run when the weights are downloaded.
+        try:
+            self.load_timeout_s = float(
+                os.environ.get("AETHER_VOICE_LOAD_TIMEOUT", "180")
+            )
+        except ValueError:
+            self.load_timeout_s = 180.0
 
     # ------------------------------------------------------------------ status
     @property
@@ -124,10 +137,41 @@ class VoiceEmotionEngine:
         return state, emb, hid, ncl
 
     def _load(self) -> None:
+        """Load the models once. A second caller waits for the first to finish.
+
+        The previous version returned immediately when a load was already in
+        flight. That looked like cooperation but it was a race: the warmup
+        thread sets status to 'loading' on page entry, and a mic request
+        arriving during those ~30s fell straight through this method and ran
+        inference against a half-built engine. Because the load order is
+        emotion2vec, then the head, then Whisper, the transcode and the
+        embedding both succeeded and the failure only surfaced at
+        `self._head(x)` as "'NoneType' object is not callable".
+
+        Waiting is the correct behaviour: the caller genuinely needs the models,
+        and blocking until they exist is what the request was asking for.
+        """
         with self._lock:
-            if self._status in ("ready", "loading"):
+            if self._status == "ready":
                 return
-            self._status = "loading"
+            if self._status == "loading":
+                wait_for_other = True
+            else:
+                wait_for_other = False
+                self._status = "loading"
+                self._error = None
+                self._loaded_evt.clear()
+
+        if wait_for_other:
+            if not self._loaded_evt.wait(self.load_timeout_s):
+                raise RuntimeError(
+                    f"voice models are still loading after "
+                    f"{self.load_timeout_s:.0f}s; try again in a moment"
+                )
+            if self._status != "ready":
+                raise RuntimeError(f"voice model load failed: {self._error}")
+            return
+
         try:
             # 1) emotion2vec+ large — frozen acoustic feature extractor
             from funasr import AutoModel as FunASRAutoModel
@@ -148,11 +192,20 @@ class VoiceEmotionEngine:
                 import whisper
                 self._whisper = whisper.load_model(self.whisper_size)
 
-            self._status = "ready"
+            with self._lock:
+                self._status = "ready"
+            print("[voice] models ready (emotion2vec + head"
+                  f"{' + whisper' if self._whisper is not None else ''})")
         except Exception as e:  # noqa: BLE001
-            self._status = "error"
-            self._error = f"{type(e).__name__}: {e}"
+            with self._lock:
+                self._status = "error"
+                self._error = f"{type(e).__name__}: {e}"
+            print(f"[voice] model load FAILED: {self._error}")
             raise
+        finally:
+            # Release every waiter, success or failure, so a failed load can
+            # never leave a request blocked until its timeout.
+            self._loaded_evt.set()
 
     def _safe_load(self) -> None:
         try:
@@ -162,14 +215,25 @@ class VoiceEmotionEngine:
 
     def warmup_async(self) -> str:
         """Start background loading and return immediately. Called on page entry."""
-        if self._status in ("ready", "loading"):
-            return self._status
+        with self._lock:
+            if self._status in ("ready", "loading"):
+                return self._status
         threading.Thread(target=self._safe_load, daemon=True).start()
         return "loading"
 
     def ensure_loaded(self) -> None:
+        """Block until the models are usable, or raise saying why they are not."""
         if self._status != "ready":
             self._load()
+        # Belt and braces: never hand back a partially built engine. If this
+        # ever trips, the message names the missing piece instead of failing
+        # later with an opaque TypeError deep in predict().
+        if self._status != "ready" or self._head is None or self._e2v is None:
+            missing = "head" if self._head is None else "feature extractor"
+            raise RuntimeError(
+                f"voice engine not ready (status={self._status}, missing={missing})"
+                + (f": {self._error}" if self._error else "")
+            )
 
     # ------------------------------------------------------------------- audio
     @staticmethod

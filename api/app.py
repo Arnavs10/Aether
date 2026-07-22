@@ -64,6 +64,16 @@ def _build_service() -> AetherService:
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     app.state.svc = _build_service()      # built once at startup
+    # Start loading the voice models now, in the background, so the ~30s cold
+    # start happens while the server boots instead of on the user's first mic
+    # tap. Failure here is not fatal: the engine records its own error and the
+    # voice endpoint reports it, so the rest of the API still comes up.
+    try:
+        from voice_emotion import get_engine
+        get_engine().warmup_async()
+        print("[voice] warmup started at server startup")
+    except Exception as exc:  # noqa: BLE001
+        print(f"[voice] could not start warmup: {type(exc).__name__}: {exc}")
     yield
 
 

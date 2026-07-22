@@ -236,7 +236,14 @@ class AetherService:
         if text:
             from perceive import perceive           # Phase 6 rule/LLM parser
             p = perceive(text, llm_fn=self.llm_fn)
-            return self.distribution_for_emotion(p.start), p.start
+            # A curate request names the feeling the listener WANTS ("happy
+            # songs to feel good"), which perceive returns as `target`. `start`
+            # is where they are now, which is what a JOURNEY needs in order to
+            # plan an arc, but a single playlist should land on the destination.
+            # For a plain mood statement perceive sets start == target, so this
+            # is a no-op there and only changes requests that ask to move.
+            label = p.target or p.start
+            return self.distribution_for_emotion(label), label
         # default
         return self.distribution_for_emotion("calm"), "calm"
 

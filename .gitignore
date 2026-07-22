@@ -32,3 +32,18 @@ phase_8_website/backend/
 .env.sh
 api/contact_submissions.jsonl
 api/feeling_feed.json
+
+# secrets
+.env.sh
+.env
+phase_8_website/frontend/.env
+
+# local backups and archives
+phase_8_website/frontend_backup_*/
+phase_8_website/frontend_src_backup_*/
+*.zip
+*.rtf
+
+# build + deps
+phase_8_website/frontend/node_modules/
+phase_8_website/frontend/dist/
