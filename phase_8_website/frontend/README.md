@@ -2,12 +2,17 @@
 
 Frontend for the Aether emotion-aware music-intelligence platform. It fronts
 the finished FastAPI service in `api/` at the repo root: the 1.2M-track
-matching brain, text + voice emotion detection (EN + HI), explained picks,
-the journey planner, live drift with harmonic crossfades, and the assistant.
+matching brain, text + voice emotion reading, explained picks, the journey
+planner, live drift with harmonic crossfades, and the assistant.
 
 **Stack:** Vite · React 19 · TypeScript · Tailwind v4 · GSAP + ScrollTrigger ·
-Lenis. Client-only SPA by design: the heavy elements are all client-side
-canvas/scroll work where SSR buys nothing.
+Lenis. Client-only SPA by design.
+
+**Language truth (everywhere in the UI):** you can **type in English or
+Hindi** and **speak in English**. Spoken Hindi is not supported. In free
+text you can also **ask for a language** ("some sad hindi songs", "kpop for
+studying") and the catalogue follows: Hindi, Punjabi, Tamil, Telugu, Korean,
+Japanese, Spanish, French, English.
 
 ---
 
@@ -34,80 +39,83 @@ npm run dev                         # → http://localhost:5173
 | `npm run preview`   | serve the production build locally            |
 | `npm run typecheck` | typecheck only                                |
 
-**Env var:** `VITE_API_BASE`, the API base URL. Never hardcoded in
-components; no secrets ever live in the frontend (Groq key, email creds and
-any streaming secrets are backend env vars). In production, set
-`VITE_API_BASE` in the host's environment settings at build time.
-
-The preloader polls `GET /health` every 2s and enters the moment the engine
-answers; cold starts stay honest on screen. If the API stays quiet for 25s a
-calm "look around while it wakes" escape appears. Browsing degraded is
-silent: a failed feature call shows one quiet line inside that panel, with a
-retry.
+**Env var:** `VITE_API_BASE` only. No secrets ever live in the frontend.
 
 ---
+
+## Two kinds of track (the freshness layer)
+
+A playlist blends **store picks** (measured features, match %, live-mixable)
+with **fresh picks** sourced live from Apple's current catalogue
+(`track_id` starts with `itunes:`; features and match are `null`; always
+playable; never live-mixable). The single predicate lives in
+`src/lib/tracks.ts → isFreshPick()`. Cards render the two differently on
+purpose: fresh picks show `(FRESH)`, never a percentage, never meters,
+never a live-mix action.
+
+Tracks arrive already playable (`preview_url`, `cover`, `link`); the
+client-side iTunes resolver (`src/lib/itunes.ts`, priority queue with a
+burst-then-throttle schedule and viewport boosting) only handles the rare
+track that ships without them.
+
+## Playback
+
+One shared player (`src/lib/audio.ts` + `src/components/player/`) serves
+all three feature pages: one track at a time app-wide, visible states,
+calm unavailable handling. Journey has "play the route" with auto-advance
+and jump-to-card. Live runs a **real crossfade** on a drift trigger: two
+audio elements, equal-power volume ramp over the engine's duration, capped
+against the audio remaining, visuals synced to the actual fade, with a
+visual-only fallback when no preview exists.
 
 ## Where things live
 
 ```
 src/
 ├── config/site.ts        nav · links · flags · canonical 15-emotion fallback
-├── lib/
-│   ├── api.ts            THE single typed client, every endpoint + helpers
-│   ├── types.ts          API contract, copied from verified live responses
-│   ├── itunes.ts         iTunes resolver: cache + ~19/min queue + JSONP
-│   ├── exportPlaylist.ts .m3u8/.json export + client-side provider_ref
-│   ├── audio.ts          the one shared preview player
-│   └── gsap.ts           central plugin registration
+├── lib/                  api client · types · tracks predicate · itunes
+│                         resolver · shared audio player · export · gsap
 ├── state/AppState.tsx    engine status · appReady gate · shared Lenis
 ├── components/
 │   ├── global/           Preloader · SmoothScroll · AmbientWaves · Grain ·
 │   │                     ScrollProgress · Nav · Footer · Faq · GoopField ·
 │   │                     Chatbot
 │   ├── ui/               ParenLabel · Reveal · Marquee · PageScaffold ·
-│   │                     SpectrumArt (+EmotionSpectrum) · BarsLoader
+│   │                     SpectrumArt (+EmotionSpectrum · Constellation ·
+│   │                     wall) · SleeveFan · VinylDisc · PipelineGallery ·
+│   │                     BarsLoader
+│   ├── player/           PlayButton · useTrackDelivery
 │   └── features/         EmotionChips · VoiceMic · TrackCard · Downloads
 └── pages/                Home · Curate · Journey · Live · Connect · 404
 ```
 
 Notes that matter when editing:
 
-- **Request building (Curate/Live):** one chip sends `{emotion}`; a blend
-  sends a 15-float `{distribution}` aligned to the live `GET /emotions`
-  order; voice passes its own `distribution` straight through; free text
-  sends `{text}`. Never send `distribution: []`.
-- **`GET /tracks`** returns 50 real sampled seeds (field is `name`, not
-  `title`) and powers the Live quick picker.
-- **`why_technical`** can be an empty string; the reasoning reveal is built
-  from the always-present fields and folds it in only when non-empty.
-- **Chat** always sends the running history (capped at 12 turns); the
-  `source` field is internal and never rendered.
-- `FLAGS.spotifyLogin` is false and the nav renders nothing for it; flipping
-  the flag is the only change when credentials exist.
-
----
+- **Send rule (Curate):** chips → voice reading → text, surfaced live in
+  the status line; the textarea dims when chips drive. Never send
+  `distribution: []`.
+- **`GET /tracks`** field is `name`, not `title`; it powers the Live seed
+  picker (shuffle accumulates, filter covers what's loaded only).
+- **Chat** always sends history (capped 12); `source` is never rendered;
+  a fallback reply is replaced with our own line.
+- The footer bottom bar shows the **visitor's** city and live local time:
+  one keyless IP lookup (display-only, cached per session), timezone
+  fallback, time-only last. Never `navigator.geolocation`.
+- Glass (`.glass-liquid`) is applied to exactly three surface groups
+  (chatbot, feature control panels + player, the 4E/feed panels) with an
+  `@supports` fallback. Keep it off full-width and canvas-adjacent
+  surfaces.
+- `FLAGS.spotifyLogin` is false and renders nothing.
 
 ## State of the build
 
-**Done and wired to the live engine:** the full design system and global
-motion shell (grain, ambient field, scroll bar, Lenis, reduced-motion), the
-cold-start-aware preloader (bar-spectrum frame, self-drawing border, scan
-sweep), Home 4A–4H including the glare sweep and the per-emotion spectrum
-reveal, the footer with the equalizer wall and rewritten FAQ, the rebuilt
-interactive bottom field (gather / stiffen / spread physics), and all five
-pages built in full: Curate, Journey, Live, Connect, plus the assistant on
-every page. Voice input with warm-on-entry runs on every feature page.
-Downloads (.m3u8/.json) work anonymously. The hero wordmark treatment is
-locked as final.
-
-**Remaining flourishes (one focused pass):** the 4D catalogue's sticky
-left visual gallery, and the 4F arc-wheel scroll + stacked-cards reveal.
-Everything else from the continuation prompt is in.
-
-**Phase 8.5 (not built, room left):** Google Sign-In + `/me/history`.
-`lib/api.ts` stays the single seam, so adding it is new functions there and
-zero component rewrites.
-
-**One banked number:** the 87% voice-model accuracy is confirmed by Arnav
-but currently unsurfaced (the hero stats and engine column were removed by
-design). Say the word if you want it back somewhere, Connect would suit it.
+Pass 4 shipped in full: the §15 order was executed top to bottom with no
+cut line. Language sweep, fresh/store rendering, playback on all three
+pages with the real Live crossfade, the Curate input truth + mic append +
+resolver speed + language surfacing, the merged Connect form with legible
+failures, mobile down to 360px, the seed picker, the visitor clock, the
+per-emotion spectrum system with its fifteen lines, the constellation, the
+denser field, the hero sleeve fan, the FAQ disc, the real marquee, the
+designed footer wall, the pinned pipeline gallery, the arc-wheel stack,
+and liquid glass. Phase 8.5 (Google Sign-In + history) remains future
+scope; `lib/api.ts` stays the single seam for it.

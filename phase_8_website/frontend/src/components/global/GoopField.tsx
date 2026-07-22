@@ -15,8 +15,10 @@
 
 import { useEffect, useRef } from "react";
 import { usePrefersReducedMotion } from "../../hooks/usePrefersReducedMotion";
+import { getEffective, subscribeEffective } from "../../lib/theme";
 
-const SPACING = 13; // CSS px between rest positions
+const SPACING_FINE = 10; // CSS px between rest positions (§7.1: denser)
+const SPACING_COARSE = 13; // phones get fewer particles (§2)
 const DOT = 2.6; // square side, CSS px
 const ATTRACT_R = 150; // pointer influence radius, CSS px
 const PULL = 0.085; // gather strength
@@ -24,9 +26,25 @@ const BURST = 4.2; // release impulse
 const SPRING = 0.045; // pull back toward the flow target
 const DAMP = 0.87; // velocity damping
 
-const C_BLUE = "rgba(46,107,255,0.6)";
-const C_SILVER = "rgba(199,204,212,0.42)";
-const C_EMBER = "rgba(214,69,61,0.75)";
+/* §6: two palettes, same physics. On light ground the near-pointer
+   highlight goes deep ink and the depth dots go white — same contrast
+   logic, flipped for the paper. */
+const PALETTES = {
+  dark: {
+    blue: "rgba(46,107,255,0.6)",
+    silver: "rgba(199,204,212,0.42)",
+    ember: "rgba(214,69,61,0.75)",
+    bright: "rgba(245,246,248,0.9)", // gathered, near the pointer
+    depth: "rgba(0,0,0,0.55)",
+  },
+  light: {
+    blue: "rgba(36,86,224,0.55)",
+    silver: "rgba(86,92,104,0.38)",
+    ember: "rgba(192,58,50,0.7)",
+    bright: "rgba(18,21,28,0.88)",
+    depth: "rgba(255,255,255,0.8)",
+  },
+} as const;
 
 export function GoopField() {
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -38,7 +56,9 @@ export function GoopField() {
     const ctx = canvas.getContext("2d");
     if (!ctx) return;
 
-    const dpr = Math.min(window.devicePixelRatio || 1, 1.5);
+    const coarse = window.matchMedia("(pointer: coarse)").matches;
+    const dpr = coarse ? 1 : Math.min(window.devicePixelRatio || 1, 1.5);
+    const spacing = coarse ? SPACING_COARSE : SPACING_FINE;
     let raf = 0;
     let visible = true;
     let running = true;
@@ -53,12 +73,17 @@ export function GoopField() {
     let count = 0;
 
     const pointer = { x: 0, y: 0, active: false, down: false };
+    let pal: (typeof PALETTES)[keyof typeof PALETTES] = PALETTES[getEffective()];
+    const unsubTheme = subscribeEffective((t) => {
+      pal = PALETTES[t];
+      if (reduced) frame(400); // repaint the static frame in the new palette
+    });
 
     const build = () => {
       const rect = canvas.getBoundingClientRect();
       canvas.width = Math.max(1, Math.floor(rect.width * dpr));
       canvas.height = Math.max(1, Math.floor(rect.height * dpr));
-      const step = SPACING * dpr;
+      const step = spacing * dpr;
       const cols = Math.ceil(canvas.width / step);
       const rows = Math.ceil(canvas.height / step);
       count = cols * rows;
@@ -94,6 +119,9 @@ export function GoopField() {
       const pBlue = new Path2D();
       const pSilver = new Path2D();
       const pEmber = new Path2D();
+      const pWhite = new Path2D();
+      const pBlack = new Path2D();
+      const whiteR = attractR * 0.45;
 
       for (let i = 0; i < count; i++) {
         const rx = restX[i];
@@ -142,17 +170,24 @@ export function GoopField() {
 
         const x = px[i] - half;
         const y = py[i] - half;
-        if (i % 41 === 0) pEmber.rect(x, y, dot, dot);
+        // §7.3: the brightest gathered particles glow white at the pointer.
+        if (pointer.active && dist < whiteR) pWhite.rect(x, y, dot, dot);
+        else if (i % 41 === 0) pEmber.rect(x, y, dot, dot);
+        else if (i % 23 === 0) pBlack.rect(x, y, dot, dot);
         else if (i % 2 === 0) pBlue.rect(x, y, dot, dot);
         else pSilver.rect(x, y, dot, dot);
       }
 
-      ctx.fillStyle = C_BLUE;
-      ctx.fill(pBlue);
-      ctx.fillStyle = C_SILVER;
+      ctx.fillStyle = pal.depth;
+      ctx.fill(pBlack);
+      ctx.fillStyle = pal.silver;
       ctx.fill(pSilver);
-      ctx.fillStyle = C_EMBER;
+      ctx.fillStyle = pal.blue;
+      ctx.fill(pBlue);
+      ctx.fillStyle = pal.ember;
       ctx.fill(pEmber);
+      ctx.fillStyle = pal.bright;
+      ctx.fill(pWhite);
     };
 
     const loop = (tMs: number) => {
@@ -233,6 +268,7 @@ export function GoopField() {
     return () => {
       running = false;
       cancelAnimationFrame(raf);
+      unsubTheme();
       io.disconnect();
       ro.disconnect();
       canvas.removeEventListener("pointermove", onMove);
@@ -247,7 +283,7 @@ export function GoopField() {
     <canvas
       ref={canvasRef}
       aria-hidden="true"
-      className="block h-48 w-full touch-pan-y md:h-60"
+      className="block h-56 w-full touch-pan-y md:h-72"
     />
   );
 }

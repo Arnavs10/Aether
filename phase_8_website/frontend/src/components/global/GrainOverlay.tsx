@@ -32,6 +32,7 @@ export function GrainOverlay() {
   return (
     <div
       aria-hidden="true"
+      data-grain
       className="pointer-events-none fixed inset-0 z-[60] opacity-[0.02]"
       style={{ backgroundImage: `url(${tile})`, backgroundRepeat: "repeat" }}
     />

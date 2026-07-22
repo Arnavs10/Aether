@@ -154,60 +154,134 @@ function searchViaJsonp(url: string): Promise<ItunesRawResult[]> {
   });
 }
 
-/* ── the rate-limited queue ─────────────────────────────── */
+/* ── the priority queue (Pass 4 §8.3) ───────────────────────
+   Burst-then-throttle: the first few requests fire with small concurrency
+   so the top of a list lands almost immediately, then everything falls
+   back to the sequential ~19/min interval Apple tolerates. Viewport code
+   boosts priorities as the user scrolls; the scheduler always serves the
+   highest-priority pending task next. */
 
-let chain: Promise<unknown> = Promise.resolve();
-let lastRequestAt = 0;
-
-function enqueue<T>(task: () => Promise<T>): Promise<T> {
-  const run = chain.then(async () => {
-    const wait = Math.max(0, lastRequestAt + MIN_INTERVAL_MS - Date.now());
-    if (wait > 0) await new Promise((r) => setTimeout(r, wait));
-    lastRequestAt = Date.now();
-    return task();
-  });
-  chain = run.catch(() => undefined); // one failure never stalls the queue
-  return run;
+interface QueueTask {
+  key: string;
+  title: string;
+  artist: string;
+  priority: number;
+  waiters: Array<(r: ItunesResolved | null) => void>;
 }
 
-/* ── public API ─────────────────────────────────────────── */
+const pendingTasks = new Map<string, QueueTask>();
+let inFlight = 0;
+let burstRemaining = 4;
+const BURST_CONCURRENCY = 2;
+let lastRequestAt = 0;
+let wakeTimer: ReturnType<typeof setTimeout> | null = null;
+let boostSeq = 0;
 
-/**
- * Resolve one track's delivery data. Cached results (including confirmed
- * misses) return instantly and never hit the network.
- */
-export async function resolveTrack(
-  title: string,
-  artist: string,
-): Promise<ItunesResolved | null> {
-  const key = cacheKey(title, artist);
-  if (memCache.has(key)) return memCache.get(key) ?? null;
-
-  const ls = loadLs();
-  if (key in ls) {
-    memCache.set(key, ls[key]);
-    return ls[key];
+function pickNext(): QueueTask | null {
+  let best: QueueTask | null = null;
+  for (const t of pendingTasks.values()) {
+    if (!best || t.priority > best.priority) best = t;
   }
+  return best;
+}
 
-  const term = encodeURIComponent(`${title} ${artist}`);
+function schedule(): void {
+  if (pendingTasks.size === 0) return;
+  const now = Date.now();
+  const canBurst = burstRemaining > 0 && inFlight < BURST_CONCURRENCY;
+  const sequentialReadyAt = lastRequestAt + MIN_INTERVAL_MS;
+  const canSequential = inFlight === 0 && now >= sequentialReadyAt;
+
+  if (canBurst || canSequential) {
+    const task = pickNext();
+    if (!task) return;
+    pendingTasks.delete(task.key);
+    if (canBurst) burstRemaining--;
+    void launch(task);
+    schedule(); // a second burst slot may be open
+    return;
+  }
+  if (inFlight === 0 && !wakeTimer) {
+    wakeTimer = setTimeout(() => {
+      wakeTimer = null;
+      schedule();
+    }, Math.max(30, sequentialReadyAt - now));
+  }
+}
+
+async function launch(task: QueueTask): Promise<void> {
+  inFlight++;
+  lastRequestAt = Date.now();
+  const term = encodeURIComponent(`${task.title} ${task.artist}`);
   const url = `${SEARCH_BASE}?term=${term}&media=music&entity=song&limit=5`;
 
-  const resolved = await enqueue(async () => {
+  let resolved: ItunesResolved | null = null;
+  try {
     let results: ItunesRawResult[];
     try {
       results = await searchViaFetch(url);
     } catch {
       results = await searchViaJsonp(url); // CORS fallback
     }
-    const best = pickBest(results, title, artist);
-    return best ? toResolved(best) : null;
-  }).catch(() => null);
+    const best = pickBest(results, task.title, task.artist);
+    resolved = best ? toResolved(best) : null;
+  } catch {
+    resolved = null;
+  }
 
-  memCache.set(key, resolved);
+  memCache.set(task.key, resolved);
   const store = loadLs();
-  store[key] = resolved;
+  store[task.key] = resolved;
   saveLs(store);
-  return resolved;
+
+  for (const w of task.waiters) w(resolved);
+  inFlight--;
+  schedule();
+}
+
+/* ── public API ─────────────────────────────────────────── */
+
+/**
+ * Resolve one track's delivery data. Cached results (including confirmed
+ * misses) return instantly and never hit the network. `priority` orders
+ * the queue; boostResolve() raises it later (viewport-driven).
+ */
+export function resolveTrack(
+  title: string,
+  artist: string,
+  priority = 0,
+): Promise<ItunesResolved | null> {
+  const key = cacheKey(title, artist);
+  if (memCache.has(key)) return Promise.resolve(memCache.get(key) ?? null);
+
+  const ls = loadLs();
+  if (key in ls) {
+    memCache.set(key, ls[key]);
+    return Promise.resolve(ls[key]);
+  }
+
+  return new Promise((resolve) => {
+    const existing = pendingTasks.get(key);
+    if (existing) {
+      existing.priority = Math.max(existing.priority, priority);
+      existing.waiters.push(resolve);
+    } else {
+      pendingTasks.set(key, {
+        key,
+        title,
+        artist,
+        priority,
+        waiters: [resolve],
+      });
+    }
+    schedule();
+  });
+}
+
+/** Raise a pending track to the front of the queue (on-screen cards). */
+export function boostResolve(title: string, artist: string): void {
+  const task = pendingTasks.get(cacheKey(title, artist));
+  if (task) task.priority = 1_000_000 + ++boostSeq;
 }
 
 /**

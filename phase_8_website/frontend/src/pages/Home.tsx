@@ -10,17 +10,78 @@
  * 4H human quote marquee (QUOTES is the seam for real /contact messages)
  */
 
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { Link } from "react-router";
 import { gsap, useGSAP } from "../lib/gsap";
 import { useAppState } from "../state/AppState";
 import { usePrefersReducedMotion } from "../hooks/usePrefersReducedMotion";
+import { useIdleMounted } from "../hooks/useIdleMounted";
 import { AETHER_EMOTIONS, EMOTION_NOTES, LINKS, SITE } from "../config/site";
 import type { EmotionLabel } from "../config/site";
 import { ParenLabel } from "../components/ui/ParenLabel";
 import { Reveal } from "../components/ui/Reveal";
 import { Marquee } from "../components/ui/Marquee";
-import { SpectrumArt, EmotionSpectrum } from "../components/ui/SpectrumArt";
+import {
+  SpectrumArt,
+  EmotionSpectrum,
+  ConstellationArt,
+  EMOTION_LINES,
+} from "../components/ui/SpectrumArt";
+import { getFeelingFeed } from "../lib/api";
+import { SleeveFan } from "../components/ui/SleeveFan";
+import { PipelineGallery } from "../components/ui/PipelineGallery";
+
+/* ── §4F: the arc-wheel scroll. Each card swings in along an arc about a
+   far-below pivot as it scrolls to centre, like spokes passing, and the
+   three settle into a slight stack. Scrub-tied, cheap, static under
+   prefers-reduced-motion. ── */
+
+function ArcCard({ index, children }: { index: number; children: ReactNode }) {
+  const ref = useRef<HTMLDivElement>(null);
+  const reduced = usePrefersReducedMotion();
+
+  useGSAP(
+    () => {
+      const el = ref.current;
+      if (!el) return;
+      if (reduced) {
+        gsap.set(el, { autoAlpha: 1, y: 0, rotation: 0, scale: 1 });
+        return;
+      }
+      gsap.fromTo(
+        el,
+        {
+          autoAlpha: 0,
+          y: 52,
+          rotation: index % 2 === 0 ? -4 : 4,
+          scale: 0.97,
+          transformOrigin: "50% 140%",
+        },
+        {
+          autoAlpha: 1,
+          y: 0,
+          rotation: 0,
+          scale: 1,
+          duration: 0.95,
+          delay: index * 0.12,
+          ease: "power3.out",
+          scrollTrigger: { trigger: el, start: "top 88%" },
+        },
+      );
+    },
+    { scope: ref, dependencies: [reduced, index] },
+  );
+
+  return (
+    <div
+      ref={ref}
+      className="glass relative rounded-sm p-8 shadow-[0_8px_24px_rgba(0,0,0,0.2)] md:p-12"
+      style={{ zIndex: index + 1, marginTop: index === 0 ? 0 : "-1.25rem" }}
+    >
+      {children}
+    </div>
+  );
+}
 
 /* ── §4D pipeline: what happens to a request, in plain words ── */
 
@@ -28,7 +89,7 @@ const PIPELINE = [
   {
     numeral: "I",
     title: "Reading the feeling",
-    body: "You write or you speak, in English or Hindi. One model reads what the words say, another listens to how you sound, and together they settle on the feeling. Not one of five moods. One of fifteen.",
+    body: "Type it in English or Hindi, or say it in English. One model reads what the words say, another listens to how you sound, and together they settle on the feeling. Not one of five moods. One of fifteen.",
   },
   {
     numeral: "II",
@@ -73,6 +134,44 @@ export default function Home() {
   const introRef = useRef<HTMLElement>(null);
   const squeezeRef = useRef<HTMLElement>(null);
   const [hovered, setHovered] = useState<EmotionLabel | null>(null);
+  const [mobileOpen, setMobileOpen] = useState<EmotionLabel | null>(null);
+  /* §11.1: paint the type first; the hero art joins one idle beat later. */
+  const artReady = useIdleMounted(260);
+
+  /* §4H moment + feeling cards. Feelings come as words only; songs are
+     never attached to another person's feeling. */
+  const [feelWords, setFeelWords] = useState<string[]>([]);
+  const [moments, setMoments] = useState<
+    Array<{ emotion: string; topTrackTitles: string[] }>
+  >([]);
+  useEffect(() => {
+    getFeelingFeed()
+      .then((items) =>
+        setFeelWords(
+          items
+            .map((i) => String(i.emotion ?? "").trim().toLowerCase())
+            .filter(Boolean)
+            .slice(0, 6),
+        ),
+      )
+      .catch(() => undefined);
+    try {
+      const raw = JSON.parse(
+        localStorage.getItem("aether.moments.v1") ?? "[]",
+      ) as Array<{ emotion?: string; topTrackTitles?: string[] }>;
+      setMoments(
+        raw
+          .filter((m) => m.emotion && Array.isArray(m.topTrackTitles))
+          .slice(0, 4)
+          .map((m) => ({
+            emotion: String(m.emotion),
+            topTrackTitles: (m.topTrackTitles as string[]).slice(0, 3),
+          })),
+      );
+    } catch {
+      /* quotes carry the strip */
+    }
+  }, []);
 
   /* 4A: settle entrance, gated on the preloader finishing. */
   useGSAP(
@@ -160,8 +259,9 @@ export default function Home() {
       {/* ══ 4A — HERO ══════════════════════════════════════ */}
       <section
         ref={heroRef}
-        className="relative flex min-h-screen flex-col justify-center px-6 pt-24 md:px-10"
+        className="relative grid min-h-screen content-center gap-10 px-6 pt-24 md:grid-cols-[1.25fr_1fr] md:items-center md:px-10"
       >
+        <div className="min-w-0">
         <div data-hero>
           <ParenLabel accent>EMOTION-AWARE MUSIC INTELLIGENCE</ParenLabel>
         </div>
@@ -175,8 +275,8 @@ export default function Home() {
           {SITE.tagline}
         </p>
         <p data-hero className="mt-8 max-w-xl text-base leading-relaxed text-mist">
-          Describe it, typed or spoken, in English or Hindi. Fifteen emotions
-          in, an explained playlist out.
+          Type it in English or Hindi. Say it out loud in English. Fifteen
+          feelings in, an explained playlist out.
         </p>
         <div data-hero className="mt-14">
           <Link
@@ -185,6 +285,16 @@ export default function Home() {
           >
             start curating →
           </Link>
+        </div>
+        </div>
+        {/* §4A: the fan of generated sleeves. Below the CTA at low opacity on
+            mobile; beside the type with real air on desktop. */}
+        <div data-hero className="mx-auto h-72 w-full max-w-md opacity-75 md:h-[32rem] md:max-w-xl md:justify-self-end md:opacity-100">
+          {artReady && (
+            <div className="fade-in h-full w-full">
+              <SleeveFan />
+            </div>
+          )}
         </div>
       </section>
 
@@ -239,28 +349,12 @@ export default function Home() {
             One request, five systems
           </h2>
         </Reveal>
-        <div className="mt-16 flex flex-col">
-          {PIPELINE.map((step, i) => (
-            <Reveal key={step.numeral} delay={i * 0.04}>
-              <div className="grid gap-6 border-t hairline py-10 md:grid-cols-[8rem_1fr] md:gap-10">
-                <span className="serif-accent text-5xl text-paper/25 md:text-6xl">
-                  {step.numeral}
-                </span>
-                <div>
-                  <h3 className="display text-2xl text-paper md:text-3xl">
-                    {step.title}
-                  </h3>
-                  <p className="mt-4 max-w-2xl text-sm leading-relaxed text-mist">
-                    {step.body}
-                  </p>
-                </div>
-              </div>
-            </Reveal>
-          ))}
+        <div className="mt-8">
+          <PipelineGallery steps={PIPELINE} />
         </div>
       </section>
 
-      {/* ══ 4E — THE 15 EMOTIONS ═══════════════════════════ */}
+      {/* ══ 4E — THE 15 EMOTIONS ═══════════════════ */}
       <section className="border-t hairline px-6 py-28 md:px-10 md:py-40">
         <Reveal>
           <ParenLabel>THE TAXONOMY</ParenLabel>
@@ -271,36 +365,69 @@ export default function Home() {
           </h2>
         </Reveal>
         <div className="mt-16 grid gap-12 md:grid-cols-[1.4fr_1fr]">
+          {/* the list: hover on desktop, tap-to-open inline on touch (§2) */}
           <ul className="flex flex-col" onMouseLeave={() => setHovered(null)}>
-            {AETHER_EMOTIONS.map((emotion) => (
-              <li key={emotion}>
-                <button
-                  type="button"
-                  onMouseEnter={() => setHovered(emotion)}
-                  onFocus={() => setHovered(emotion)}
-                  className={`display block w-fit py-1 text-left text-3xl transition-all duration-300 md:text-5xl ${
-                    active === emotion
-                      ? "glow-blue translate-x-2 text-paper"
-                      : "text-paper/30 hover:text-paper"
-                  }`}
-                >
-                  {emotion}
-                </button>
-              </li>
-            ))}
+            {AETHER_EMOTIONS.map((emotion) => {
+              const openInline = mobileOpen === emotion;
+              return (
+                <li key={emotion}>
+                  <button
+                    type="button"
+                    onMouseEnter={() => setHovered(emotion)}
+                    onFocus={() => setHovered(emotion)}
+                    onClick={() =>
+                      setMobileOpen((v) => (v === emotion ? null : emotion))
+                    }
+                    aria-expanded={openInline}
+                    className={`display block w-fit py-1 text-left text-3xl transition-all duration-300 md:text-5xl ${
+                      active === emotion || openInline
+                        ? "glow-blue translate-x-2 text-paper"
+                        : "text-paper/30 hover:text-paper"
+                    }`}
+                  >
+                    {emotion}
+                  </button>
+                  {/* mobile inline panel */}
+                  <div
+                    className="grid transition-[grid-template-rows] duration-500 ease-out md:hidden"
+                    style={{ gridTemplateRows: openInline ? "1fr" : "0fr" }}
+                  >
+                    <div className="overflow-hidden">
+                      <div className="glass mb-3 mt-2 rounded-sm p-4">
+                        <div className="h-20">
+                          <EmotionSpectrum emotion={emotion} />
+                        </div>
+                        <p className="mono-meta mt-3 text-paper/50">
+                          ({EMOTION_NOTES[emotion].toUpperCase()})
+                        </p>
+                        <p className="mt-2 text-sm leading-relaxed text-mist">
+                          {EMOTION_LINES[emotion]}
+                        </p>
+                      </div>
+                    </div>
+                  </div>
+                </li>
+              );
+            })}
           </ul>
-          {/* the reveal: a spectrum that feels like the emotion */}
-          <div className="relative hidden md:block">
-            <div className="glass sticky top-28 flex min-h-72 flex-col justify-between rounded-sm p-8">
+
+          {/* the readout: centred against the list, sticky as it scrolls (§4E.1) */}
+          <div className="hidden md:flex md:flex-col">
+            <div className="glass-liquid sticky top-[calc(50vh-14rem)] my-auto flex min-h-[26rem] flex-col justify-between rounded-sm p-8">
               {active ? (
                 <>
                   <div className="h-36">
                     <EmotionSpectrum emotion={active} />
                   </div>
-                  <div className="mt-6 flex items-baseline justify-between gap-4">
-                    <p className="serif-accent text-4xl text-paper">{active}</p>
-                    <p className="mono-meta text-paper/50">
-                      ({EMOTION_NOTES[active].toUpperCase()})
+                  <div className="mt-6">
+                    <div className="flex items-baseline justify-between gap-4">
+                      <p className="serif-accent text-4xl text-paper">{active}</p>
+                      <p className="mono-meta text-paper/50">
+                        ({EMOTION_NOTES[active].toUpperCase()})
+                      </p>
+                    </div>
+                    <p className="mt-4 text-sm leading-relaxed text-mist">
+                      {EMOTION_LINES[active]}
                     </p>
                   </div>
                 </>
@@ -325,8 +452,8 @@ export default function Home() {
         <Reveal>
           <ParenLabel>THREE WAYS IN</ParenLabel>
         </Reveal>
-        <div className="mt-14 flex flex-col gap-24">
-          <Reveal>
+        <div className="mt-14 flex flex-col">
+          <ArcCard index={0}>
             <div className="grid items-center gap-10 md:grid-cols-2">
               <div>
                 <ParenLabel accent>01 · THE CORE</ParenLabel>
@@ -345,9 +472,9 @@ export default function Home() {
               </div>
               <SpectrumArt variant="curate" className="h-40 w-full md:h-56" />
             </div>
-          </Reveal>
+          </ArcCard>
 
-          <Reveal>
+          <ArcCard index={1}>
             <div className="grid items-center gap-10 md:grid-cols-2">
               <SpectrumArt
                 variant="journey"
@@ -369,9 +496,9 @@ export default function Home() {
                 </Link>
               </div>
             </div>
-          </Reveal>
+          </ArcCard>
 
-          <Reveal>
+          <ArcCard index={2}>
             <div className="grid items-center gap-10 md:grid-cols-2">
               <div>
                 <ParenLabel accent>03 · THE PLAYER</ParenLabel>
@@ -390,7 +517,7 @@ export default function Home() {
               </div>
               <SpectrumArt variant="live" className="h-40 w-full md:h-56" />
             </div>
-          </Reveal>
+          </ArcCard>
         </div>
       </section>
 
@@ -398,7 +525,7 @@ export default function Home() {
       <section className="border-t hairline px-6 py-28 md:px-10 md:py-40">
         <Reveal>
           <ParenLabel>THE BUILDER</ParenLabel>
-          <div className="mt-8 grid gap-12 md:grid-cols-2">
+          <div className="mt-8 grid gap-12 md:grid-cols-2 md:items-center">
             <div>
               <p className="serif-accent max-w-xl text-2xl leading-snug text-paper/85 md:text-3xl">
                 Built by one student who wanted software to listen better.
@@ -440,25 +567,50 @@ export default function Home() {
               </div>
             </div>
             <div className="glass rounded-sm p-6">
-              <SpectrumArt variant="wall" className="h-64 w-full md:h-full md:min-h-72" />
+              {/* fifteen nodes, one per emotion: a feeling finding its
+                  neighbours (§4G). literally what the project is. */}
+              <ConstellationArt className="h-72 w-full md:h-96" />
             </div>
           </div>
         </Reveal>
       </section>
 
-      {/* ══ 4H — WHAT IT FEELS LIKE ════════════════════════ */}
+      {/* ══ 4H — WHAT IT FEELS LIKE ══════════════════ */}
       <section className="border-t hairline py-24 md:py-32">
         <div className="px-6 md:px-10">
           <ParenLabel>WHAT IT FEELS LIKE</ParenLabel>
         </div>
         <div className="mt-10">
           <Marquee>
-            {QUOTES.map((q) => (
-              <figure key={q} className="glass w-80 shrink-0 rounded-sm p-6 md:w-96">
-                <blockquote className="serif-accent text-lg leading-snug text-paper/80">
-                  "{q}"
-                </blockquote>
-              </figure>
+            {QUOTES.map((q, i) => (
+              <span key={q} className="flex shrink-0 gap-6">
+                <figure className="glass flex w-[30rem] shrink-0 flex-col justify-center rounded-sm p-9 md:w-[38rem]">
+                  <blockquote className="serif-accent text-xl leading-snug text-paper/80 md:text-2xl">
+                    "{q}"
+                  </blockquote>
+                </figure>
+                {/* a real feeling from the feed: the word only, never songs
+                    joined to someone else's feeling (§4H) */}
+                {feelWords[i] && (
+                  <figure className="glass flex w-[22rem] shrink-0 flex-col justify-between rounded-sm p-9">
+                    <span className="mono-meta text-paper/40">(FELT HERE, RECENTLY)</span>
+                    <span className="serif-accent mt-5 text-5xl text-paper/85">
+                      {feelWords[i]}
+                    </span>
+                  </figure>
+                )}
+                {/* this browser's own history: feeling + its own top tracks */}
+                {moments[i] && (
+                  <figure className="glass flex w-[36rem] shrink-0 flex-col justify-between rounded-sm p-9">
+                    <span className="mono-meta text-blue">
+                      ({moments[i].emotion.toUpperCase()})
+                    </span>
+                    <span className="mt-5 text-base leading-relaxed text-paper/70">
+                      {moments[i].topTrackTitles.join(" · ")}
+                    </span>
+                  </figure>
+                )}
+              </span>
             ))}
           </Marquee>
         </div>

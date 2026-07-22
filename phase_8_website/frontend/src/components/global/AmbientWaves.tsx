@@ -1,43 +1,48 @@
 /**
- * AETHER — ambient background motion (§3.1 Safari fix).
- * The blob field now renders to a SMALL fixed-resolution canvas (240×135,
- * DPR 1) at ~30fps; the browser stretches it to the viewport with a CSS
- * blur. Same look, an order of magnitude cheaper than the old three
- * full-viewport gradient fills per frame. Paused on tab-hide; a single
- * static frame under prefers-reduced-motion.
+ * AETHER — the ambient ground (Pass 7 §1: made STILL, permanently).
+ *
+ * Three passes of blur-tuning couldn't stop Chrome resolving the drifting
+ * blobs as faint moving shapes, so the approach changes per the punch
+ * list: the field is now rendered ONCE, at high internal resolution, and
+ * the animation loop no longer exists. No per-frame repaint, no alpha
+ * pulse, no drift — nothing left that can shimmer, in any engine. The
+ * composition and palette are unchanged; the page's life comes from the
+ * art and interactions, not the wallpaper.
+ *
+ * Redraws happen only on theme change (the light palette multiplies
+ * colour washes into the paper instead of adding glow to the ink).
  */
 
 import { useEffect, useRef } from "react";
-import { usePrefersReducedMotion } from "../../hooks/usePrefersReducedMotion";
-
-const W = 240;
-const H = 135;
-const FRAME_MS = 33; // ~30fps cap
+import { getEffective, subscribeEffective } from "../../lib/theme";
 
 interface Field {
   cx: number;
   cy: number;
-  orbitX: number;
-  orbitY: number;
-  speed: number;
-  phase: number;
-  radius: number; // fraction of max side
+  radius: number;
   color: [number, number, number];
   alpha: number;
 }
 
-const FIELDS: Field[] = [
-  { cx: 0.22, cy: 0.3, orbitX: 0.1, orbitY: 0.08, speed: 0.045, phase: 0,
-    radius: 0.55, color: [120, 130, 150], alpha: 0.055 },
-  { cx: 0.78, cy: 0.62, orbitX: 0.09, orbitY: 0.1, speed: 0.035, phase: 2.1,
-    radius: 0.6, color: [46, 107, 255], alpha: 0.05 },
-  { cx: 0.5, cy: 0.95, orbitX: 0.12, orbitY: 0.05, speed: 0.028, phase: 4.2,
-    radius: 0.5, color: [90, 110, 160], alpha: 0.045 },
+/* The same composition the animated field settled around. */
+const FIELDS_DARK: Field[] = [
+  { cx: 0.24, cy: 0.32, radius: 0.55, color: [120, 130, 150], alpha: 0.055 },
+  { cx: 0.76, cy: 0.6, radius: 0.6, color: [46, 107, 255], alpha: 0.05 },
+  { cx: 0.52, cy: 0.94, radius: 0.5, color: [90, 110, 160], alpha: 0.045 },
 ];
+
+const FIELDS_LIGHT: Field[] = [
+  { cx: 0.24, cy: 0.32, radius: 0.55, color: [126, 122, 106], alpha: 0.07 },
+  { cx: 0.76, cy: 0.6, radius: 0.6, color: [36, 86, 224], alpha: 0.075 },
+  { cx: 0.52, cy: 0.94, radius: 0.5, color: [165, 126, 43], alpha: 0.05 },
+];
+
+/* High internal resolution: no upscale interpolation artifacts (§1.3). */
+const W = 960;
+const H = 540;
 
 export function AmbientWaves() {
   const canvasRef = useRef<HTMLCanvasElement>(null);
-  const reduced = usePrefersReducedMotion();
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -48,62 +53,53 @@ export function AmbientWaves() {
     canvas.width = W;
     canvas.height = H;
 
-    let raf = 0;
-    let running = true;
-    let last = 0;
+    const ctxFilterOK =
+      typeof ctx.filter === "string" &&
+      (() => {
+        try {
+          ctx.filter = "blur(1px)";
+          const ok = ctx.filter === "blur(1px)";
+          ctx.filter = "none";
+          return ok;
+        } catch {
+          return false;
+        }
+      })();
+    canvas.style.filter = ctxFilterOK ? "blur(20px)" : "blur(46px)";
 
-    const draw = (tMs: number) => {
-      const t = tMs / 1000;
+    const paint = (theme: "dark" | "light") => {
+      ctx.filter = "none";
       ctx.clearRect(0, 0, W, H);
-      ctx.globalCompositeOperation = "lighter";
-      for (const b of FIELDS) {
-        const x = (b.cx + Math.sin(t * b.speed * 2 + b.phase) * b.orbitX) * W;
-        const y = (b.cy + Math.cos(t * b.speed * 1.6 + b.phase) * b.orbitY) * H;
+      if (ctxFilterOK) ctx.filter = "blur(26px)";
+      ctx.globalCompositeOperation = theme === "light" ? "multiply" : "lighter";
+      const fields = theme === "light" ? FIELDS_LIGHT : FIELDS_DARK;
+      for (const b of fields) {
+        const x = b.cx * W;
+        const y = b.cy * H;
         const r = b.radius * Math.max(W, H);
-        const a = b.alpha * (0.85 + 0.15 * Math.sin(t * 0.3 + b.phase));
-        const grad = ctx.createRadialGradient(x, y, 0, x, y, r);
-        const [cr, cg, cb] = b.color;
-        grad.addColorStop(0, `rgba(${cr},${cg},${cb},${a})`);
-        grad.addColorStop(1, `rgba(${cr},${cg},${cb},0)`);
-        ctx.fillStyle = grad;
+        const g = ctx.createRadialGradient(x, y, 0, x, y, r);
+        g.addColorStop(0, `rgba(${b.color[0]},${b.color[1]},${b.color[2]},${b.alpha})`);
+        g.addColorStop(1, `rgba(${b.color[0]},${b.color[1]},${b.color[2]},0)`);
+        ctx.fillStyle = g;
         ctx.fillRect(0, 0, W, H);
       }
+      ctx.filter = "none";
     };
 
-    const loop = (tMs: number) => {
-      if (!running) return;
-      if (tMs - last >= FRAME_MS) {
-        last = tMs;
-        draw(tMs);
-      }
-      raf = requestAnimationFrame(loop);
-    };
-
-    if (reduced) {
-      draw(1_000);
-    } else {
-      raf = requestAnimationFrame(loop);
-    }
-
-    const onVisibility = () => {
-      running = document.visibilityState === "visible";
-      if (running && !reduced) raf = requestAnimationFrame(loop);
-    };
-    document.addEventListener("visibilitychange", onVisibility);
-
-    return () => {
-      running = false;
-      cancelAnimationFrame(raf);
-      document.removeEventListener("visibilitychange", onVisibility);
-    };
-  }, [reduced]);
+    paint(getEffective());
+    const unsubTheme = subscribeEffective(paint);
+    return () => unsubTheme();
+  }, []);
 
   return (
     <canvas
       ref={canvasRef}
       aria-hidden="true"
       className="fixed inset-0 z-0 h-full w-full"
-      style={{ filter: "blur(46px)", transform: "scale(1.12)" }}
+      style={{
+        transform: "scale(1.12) translateZ(0)",
+        willChange: "transform",
+      }}
     />
   );
 }

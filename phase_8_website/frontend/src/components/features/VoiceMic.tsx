@@ -1,18 +1,22 @@
 /**
- * AETHER — the mic experience (§12). Warmup starts the moment the component
- * mounts so the models load while the user reads; tapping before ready shows
- * the stepped-bar warming state (the preloader's language in miniature) and
- * starts recording the moment the engine reports ready. Recording goes to
- * POST /voice-emotion as multipart audio; the parent receives the full
- * response (emotion, text, distribution) and decides what to do with it.
+ * AETHER — the mic, rebuilt from scratch (Pass 6 §1).
+ *
+ * The state machine is four states and NOTHING is terminal:
+ *   idle → (click) listening → (stop) processing → idle
+ * Every await path catches back to idle with one calm line. The mic is
+ * COMPLETELY decoupled from warmup: warmup is a single fire-and-forget
+ * request per page load (module-level guard — never polled, never
+ * re-called on render), and no flag from it ever gates the button. If
+ * the engine is still cold at submit time, we retry that same clip once
+ * after a short beat, then hand back a usable idle button either way.
  */
 
 import { useEffect, useRef, useState } from "react";
 import { ApiError, voiceEmotion, voiceWarmup } from "../../lib/api";
-import type { VoiceEmotionResponse, WarmupState } from "../../lib/types";
+import type { VoiceEmotionResponse } from "../../lib/types";
 import { BarsLoader } from "../ui/BarsLoader";
 
-type MicPhase = "idle" | "warming" | "recording" | "processing";
+type MicPhase = "idle" | "listening" | "processing";
 
 interface Props {
   onResult: (r: VoiceEmotionResponse) => void;
@@ -20,55 +24,53 @@ interface Props {
 }
 
 const MAX_RECORD_MS = 12_000;
+const WARM_RETRY_MS = 2_800;
+
+const supported =
+  typeof navigator !== "undefined" &&
+  !!navigator.mediaDevices?.getUserMedia &&
+  typeof MediaRecorder !== "undefined";
+
+/* §1: ONCE per page load, fire-and-forget, result ignored. */
+let warmupFired = false;
+function fireWarmupOnce(): void {
+  if (warmupFired || !supported) return;
+  warmupFired = true;
+  voiceWarmup().catch(() => undefined);
+}
 
 export function VoiceMic({ onResult, disabled = false }: Props) {
-  const [warm, setWarm] = useState<WarmupState>("cold");
   const [phase, setPhase] = useState<MicPhase>("idle");
   const [note, setNote] = useState<string | null>(null);
 
-  const wantsRecord = useRef(false);
   const recorder = useRef<MediaRecorder | null>(null);
   const chunks = useRef<Blob[]>([]);
   const stopTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const retryTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const alive = useRef(true);
 
-  /* Warm on entry, poll lightly until ready or error. */
   useEffect(() => {
     alive.current = true;
-    let timer: ReturnType<typeof setTimeout>;
-    let polls = 0;
-
-    const poll = async () => {
-      if (!alive.current || polls++ > 40) return;
-      try {
-        const r = await voiceWarmup();
-        if (!alive.current) return;
-        setWarm(r.status);
-        if (r.status === "ready") {
-          if (wantsRecord.current) {
-            wantsRecord.current = false;
-            void beginRecording();
-          }
-          return;
-        }
-        if (r.status === "error") return;
-        timer = setTimeout(poll, wantsRecord.current ? 2_000 : 4_000);
-      } catch {
-        if (!alive.current) return;
-        timer = setTimeout(poll, 5_000);
-      }
-    };
-    void poll();
-
+    fireWarmupOnce();
     return () => {
       alive.current = false;
-      clearTimeout(timer);
       if (stopTimer.current) clearTimeout(stopTimer.current);
-      recorder.current?.stream.getTracks().forEach((t) => t.stop());
+      if (retryTimer.current) clearTimeout(retryTimer.current);
+      try {
+        recorder.current?.stream.getTracks().forEach((t) => t.stop());
+      } catch {
+        /* already stopped */
+      }
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  const toIdle = (message: string | null) => {
+    if (!alive.current) return;
+    setPhase("idle");
+    setNote(message);
+  };
+
+  /* ── listening ─────────────────────────────────────────── */
   const beginRecording = async () => {
     setNote(null);
     try {
@@ -88,85 +90,98 @@ export function VoiceMic({ onResult, disabled = false }: Props) {
       };
       rec.onstop = () => {
         stream.getTracks().forEach((t) => t.stop());
-        void submit(new Blob(chunks.current, { type: rec.mimeType || "audio/webm" }));
+        void submit(new Blob(chunks.current, { type: rec.mimeType || "audio/webm" }), true);
+      };
+      rec.onerror = () => {
+        stream.getTracks().forEach((t) => t.stop());
+        toIdle("the mic hit a snag. tap and try again");
       };
       rec.start();
-      setPhase("recording");
+      setPhase("listening");
       stopTimer.current = setTimeout(() => stopRecording(), MAX_RECORD_MS);
-    } catch {
-      setPhase("idle");
-      setNote("the mic was blocked. allow microphone access and try again");
+    } catch (err) {
+      const name = err instanceof DOMException ? err.name : "";
+      toIdle(
+        name === "NotAllowedError" || name === "SecurityError"
+          ? "the mic needs permission. allow it in the browser and tap again"
+          : name === "NotFoundError"
+            ? "no microphone found on this device"
+            : "the mic couldn't start. try again",
+      );
     }
   };
 
   const stopRecording = () => {
     if (stopTimer.current) clearTimeout(stopTimer.current);
-    if (recorder.current?.state === "recording") recorder.current.stop();
+    try {
+      if (recorder.current?.state === "recording") recorder.current.stop();
+      else toIdle(null);
+    } catch {
+      toIdle("the mic hit a snag. tap and try again");
+    }
   };
 
-  const submit = async (blob: Blob) => {
+  /* ── processing (one bounded cold-start retry, then idle) ── */
+  const submit = async (blob: Blob, allowRetry: boolean) => {
     if (!alive.current) return;
     setPhase("processing");
     try {
       const r = await voiceEmotion(blob);
       if (!alive.current) return;
       setPhase("idle");
+      setNote(null);
       onResult(r);
     } catch (err) {
       if (!alive.current) return;
-      setPhase("idle");
-      if (err instanceof ApiError && err.isWarming) {
-        setWarm("loading");
-        setNote("the voice engine is still waking. give it a moment and tap again");
-      } else {
-        setNote("the voice engine didn't answer. try again");
+      if (err instanceof ApiError && err.isWarming && allowRetry) {
+        setNote("the voice engine is waking. one more try in a second…");
+        retryTimer.current = setTimeout(() => {
+          if (alive.current) void submit(blob, false);
+        }, WARM_RETRY_MS);
+        return;
       }
+      toIdle(
+        err instanceof ApiError && err.isWarming
+          ? "the voice engine is still waking. tap and speak once more"
+          : "the voice engine didn't answer. try again",
+      );
     }
   };
 
   const onTap = () => {
-    if (disabled || phase === "processing") return;
-    setNote(null);
-    if (phase === "recording") {
+    if (disabled || phase === "processing" || !supported) return;
+    if (phase === "listening") {
       stopRecording();
-      return;
-    }
-    if (warm !== "ready") {
-      wantsRecord.current = true;
-      setPhase("warming");
       return;
     }
     void beginRecording();
   };
 
-  const showBars = phase === "warming" || phase === "recording" || phase === "processing";
-  const tone = phase === "recording" ? "blue" : phase === "warming" ? "gold" : "silver";
+  const busy = phase === "listening" || phase === "processing";
   const label =
-    phase === "recording"
+    phase === "listening"
       ? "listening… tap to finish"
       : phase === "processing"
         ? "reading the feeling…"
-        : phase === "warming"
-          ? "waking the voice engine…"
-          : warm === "error"
-            ? "voice is unavailable right now"
-            : null;
+        : !supported
+          ? "voice input isn't supported in this browser"
+          : null;
 
   return (
     <div className="flex items-center gap-3">
       <button
         type="button"
         onClick={onTap}
-        disabled={disabled || warm === "error"}
-        aria-label={phase === "recording" ? "Stop recording" : "Speak how you feel"}
+        disabled={disabled || !supported}
+        aria-label={phase === "listening" ? "Stop recording" : "Speak how you feel"}
         className={`flex h-12 w-12 items-center justify-center border transition-all duration-200 disabled:opacity-40 ${
-          phase === "recording"
+          phase === "listening"
             ? "border-blue [box-shadow:0_0_18px_rgba(46,107,255,0.4)]"
             : "hairline hover:border-paper/35"
         }`}
       >
-        {showBars ? (
-          <BarsLoader tone={tone} />
+        {busy ? (
+          <BarsLoader tone={phase === "listening" ? "blue" : "silver"} />
         ) : (
           <svg viewBox="0 0 24 24" className="h-5 w-5" aria-hidden="true">
             <rect x="9" y="3" width="6" height="11" rx="1" fill="var(--color-paper)" opacity="0.75" />
@@ -176,7 +191,7 @@ export function VoiceMic({ onResult, disabled = false }: Props) {
         )}
       </button>
       {(label || note) && (
-        <span className={`mono-meta ${note ? "text-ember/90" : "text-paper/50"}`}>
+        <span className={`mono-meta ${note ? "text-ember/90" : "text-paper/50"}`} aria-live="polite">
           ({(note ?? label ?? "").toUpperCase()})
         </span>
       )}

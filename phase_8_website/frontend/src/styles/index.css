@@ -20,6 +20,80 @@
   --font-mono: "Space Mono", ui-monospace, "SF Mono", monospace;
 }
 
+
+/* ══ Pass 5 §6 — the light theme. A designed light, not an inversion:
+   warm paper ground, deep ink type, the same accents re-tuned to read on
+   light. `.theme-light` on <html> flips every token the site uses. ══ */
+.theme-light {
+  --color-ink: #eceae4;
+  --color-paper: #12151c;
+  --color-blue: #2456e0;
+  --color-gold: #a57e2b;
+  --color-silver: #7c838f;
+  --color-ember: #c03a32;
+  --color-mist: #565c68;
+  --color-line: rgba(18, 21, 28, 0.12);
+  scrollbar-color: rgba(18, 21, 28, 0.25) transparent;
+}
+.theme-light body::before {
+  background: radial-gradient(120% 80% at 50% 0%, #f7f5ef 0%, #eceae4 62%);
+}
+.theme-light ::selection {
+  background: rgba(36, 86, 224, 0.22);
+  color: var(--color-paper);
+}
+.theme-light .glass {
+  background: rgba(255, 255, 255, 0.55);
+  border-color: rgba(18, 21, 28, 0.1);
+}
+.theme-light .glass-liquid {
+  background: color-mix(
+    in oklab,
+    color-mix(in oklab, white 88%, var(--color-blue) 12%) 62%,
+    transparent
+  );
+  background-image: linear-gradient(
+    135deg,
+    color-mix(in oklab, white 70%, transparent) 0%,
+    transparent 40%
+  );
+  box-shadow:
+    inset 0 1px 0 color-mix(in oklab, white 80%, transparent),
+    inset 0 -1px 0 color-mix(in oklab, black 12%, transparent),
+    0 8px 32px rgb(18 21 28 / 0.14);
+}
+/* The wordmark keeps its drift; the metal just goes dark. */
+.theme-light .chrome-text {
+  background-image: linear-gradient(
+    108deg,
+    #3a4150 0%,
+    #12151c 18%,
+    #565f6e 34%,
+    #0d0f15 52%,
+    #4a5261 68%,
+    #12151c 86%,
+    #3a4150 100%
+  );
+}
+.theme-light [data-grain] {
+  filter: invert(1);
+  opacity: 0.03;
+}
+
+/* §6: the switch crossfades instead of flipping. */
+.theme-anim,
+.theme-anim *,
+.theme-anim ::before,
+.theme-anim ::after {
+  transition:
+    background-color 0.5s ease,
+    color 0.5s ease,
+    border-color 0.5s ease,
+    fill 0.5s ease,
+    stroke 0.5s ease,
+    box-shadow 0.5s ease !important;
+}
+
 /* ── base ─────────────────────────────────────────────────── */
 html {
   background: var(--color-ink);
@@ -84,6 +158,37 @@ body::before {
   -webkit-backdrop-filter: blur(16px);
   border: 1px solid var(--color-line);
 }
+/* §13 — Liquid Glass. The character is the edge, not the blur: a bright
+   specular rim catching light on one side and dying on the other, a thin
+   inner highlight, enough blur that what sits behind reads as refracted.
+   Blue-tinted, never neutral grey. Small bounded surfaces ONLY, roughly
+   three visible at once, never over the live canvases. */
+.glass-liquid {
+  background: color-mix(
+    in oklab,
+    color-mix(in oklab, var(--color-ink) 86%, var(--color-blue) 14%) 58%,
+    transparent
+  );
+  background-image: linear-gradient(
+    135deg,
+    color-mix(in oklab, white 22%, transparent) 0%,
+    transparent 40%
+  );
+  border: 1px solid transparent;
+  -webkit-backdrop-filter: blur(20px) saturate(160%);
+  backdrop-filter: blur(20px) saturate(160%);
+  box-shadow:
+    inset 0 1px 0 color-mix(in oklab, white 18%, transparent),
+    inset 0 -1px 0 color-mix(in oklab, black 30%, transparent),
+    0 8px 32px rgb(0 0 0 / 0.4);
+}
+@supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+  /* No blur available: a solid tinted panel, same rim, still deliberate. */
+  .glass-liquid {
+    background-color: color-mix(in oklab, var(--color-ink) 92%, var(--color-blue) 8%);
+  }
+}
+
 .hairline {
   border-color: var(--color-line);
 }
@@ -122,6 +227,11 @@ body::before {
   to { transform: translateX(-50%); }
 }
 /* Hard-stepped equalizer motion for small loaders (mechanical, not soft). */
+@keyframes fade-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+.fade-in { animation: fade-in 0.7s ease both; }
 @keyframes eq-step {
   0% { transform: scaleY(0.2); }
   25% { transform: scaleY(0.9); }

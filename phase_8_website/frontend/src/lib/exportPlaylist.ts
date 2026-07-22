@@ -21,6 +21,18 @@ import { peekResolved } from "./itunes";
  */
 export function withProviderRefs(tracks: Track[]): Track[] {
   return tracks.map((t) => {
+    // Server-resolved delivery wins (§3.2); the cache covers the rest.
+    if (t.preview_url || t.link) {
+      return {
+        ...t,
+        provider_ref: {
+          source: "itunes",
+          preview_url: t.preview_url ?? undefined,
+          link: t.link ?? undefined,
+          artwork: t.cover ?? undefined,
+        },
+      };
+    }
     const r = peekResolved(t.title, t.artist);
     if (!r) return t;
     return {

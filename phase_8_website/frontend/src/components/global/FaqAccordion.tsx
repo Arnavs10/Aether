@@ -15,7 +15,7 @@ interface FaqItem {
 const ITEMS: FaqItem[] = [
   {
     q: "What do the four features actually do?",
-    a: "Curate is the core. Tell it how you feel, typed or spoken, in English or Hindi, and it builds a playlist from 1.2 million songs with the reasoning shown for every pick. Journey plans a route: say where you are and where you want to end up, and it arranges the stops between. Live listens while music plays and, when your mood moves, mixes into a song that fits the new one. Connect is Arnav, and a way to reach him.",
+    a: "Curate is the core. Tell it how you feel, typed in English or Hindi or spoken in English, and it builds a playlist from 1.2 million songs with the reasoning shown for every pick. Journey plans a route: say where you are and where you want to end up, and it arranges the stops between. Live listens while music plays and, when your mood moves, mixes into a song that fits the new one. Connect is Arnav, and a way to reach him.",
   },
   {
     q: "Do I need an account or login?",
@@ -27,7 +27,7 @@ const ITEMS: FaqItem[] = [
   },
   {
     q: "How does voice input work?",
-    a: "Tap the mic and talk normally, in English or Hindi. One model listens to how you sound while another writes down what you said, and together they land on the feeling. They warm up quietly in the background when you open a page, so the mic is usually ready by the time you are.",
+    a: "Tap the mic and talk normally in English. One model listens to how you sound while another writes down what you said, and together they land on the feeling. If Hindi is more natural, type it, the text box reads it fluently. The models warm up quietly in the background when you open a page, so the mic is usually ready by the time you are.",
   },
   {
     q: "What happens to my data?",

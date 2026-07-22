@@ -70,7 +70,7 @@ export const FLAGS = {
 export const SITE = {
   wordmark: "AETHER",
   tagline: "music that knows how you feel.",
-  location: "Indore, India",
+  location: "Bhopal, India",
   timezone: "Asia/Kolkata",
   year: new Date().getFullYear(),
 } as const;

@@ -17,6 +17,7 @@ import { ScrollProgress } from "./components/global/ScrollProgress";
 import { Nav } from "./components/global/Nav";
 import { Footer } from "./components/global/Footer";
 import { Chatbot } from "./components/global/Chatbot";
+import { ThemeToggle } from "./components/global/ThemeToggle";
 import Home from "./pages/Home";
 import Curate from "./pages/Curate";
 import Journey from "./pages/Journey";
@@ -45,6 +46,7 @@ export default function App() {
         <Footer />
       </main>
 
+      <ThemeToggle />
       <Chatbot />
       <GrainOverlay />
     </AppStateProvider>

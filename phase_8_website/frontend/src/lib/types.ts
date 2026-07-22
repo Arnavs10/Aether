@@ -9,21 +9,34 @@ export type { EmotionLabel };
 
 /* ── shared: TrackOut (§2.4) ────────────────────────────── */
 
-/** One recommended track, exactly as /curate and /journey return it. */
+/**
+ * One recommended track, exactly as /curate and /journey return it.
+ * As of the freshness layer (Pass 4 §3) a playlist holds TWO kinds:
+ * store picks (features + match_score present, live-mixable) and fresh
+ * picks (`track_id` starts with "itunes:", features/match are null,
+ * always playable, never live-mixable). Test with lib/tracks.isFreshPick.
+ */
 export interface Track {
   rank: number;
   track_id: string;
   title: string;
   artist: string;
   source_emotion: string;
-  /** 0–1 normalized store features (tempo is NOT bpm). */
-  energy: number;
-  valence: number;
-  tempo: number;
-  match_score: number;
+  /** 0–1 normalized store features. NULL on fresh picks (tempo is NOT bpm). */
+  energy: number | null;
+  valence: number | null;
+  tempo: number | null;
+  /** NULL on fresh picks. Never render null as a percentage. */
+  match_score: number | null;
   why: string | null;
-  /** Verified: can arrive as an empty string. Fold in only when non-empty. */
   why_technical: string | null;
+  /* Server-resolved delivery (§3.2) — present on every fresh pick and most
+     store picks. When preview_url exists, never re-queue the resolver. */
+  year?: number | null;
+  album?: string | null;
+  preview_url?: string | null;
+  cover?: string | null;
+  link?: string | null;
   /**
    * CLIENT-SIDE ONLY. The API never returns this; the frontend attaches it
    * after the iTunes lookup (preview_url, link, artwork, duration) so the
