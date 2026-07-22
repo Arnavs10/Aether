@@ -86,6 +86,7 @@ class AetherRecommender:
         freshness_ratio: float = 0.0,
         year_min: Optional[int] = None,
         year_max: Optional[int] = None,
+        market: Optional[str] = None,          
     ):
         """
         Args:
@@ -106,6 +107,7 @@ class AetherRecommender:
         self.default_freshness_ratio = float(freshness_ratio)
         self.default_year_min = year_min
         self.default_year_max = year_max
+        self.default_market = market    
         # track_id → normalized 6-dim match vector, for feature re-hydration.
         self._feature_index = self._build_feature_index(self.store)
 
@@ -202,6 +204,9 @@ class AetherRecommender:
             year_max = self.default_year_max
         if freshness_ratio is None:
             freshness_ratio = self.default_freshness_ratio
+        if market is None:
+            market = self.default_market
+
 
         # 1. Validate the request.
         dist = np.asarray(distribution, dtype=np.float64).flatten()

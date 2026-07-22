@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import os
 import sys
+import threading     
 import uuid
 from pathlib import Path
 from typing import Callable, Optional
@@ -159,6 +160,7 @@ class AetherService:
                           if harmonic_index is not None else None)
         self._planner = CrossfadePlanner()
         self._sessions: dict[str, LiveTransitionEngine] = {}
+        self._journey_lock = threading.Lock()        
 
     # ── constructors ──
     @classmethod
@@ -260,8 +262,24 @@ class AetherService:
 
     # ── AGENT: journey ──
     def journey(self, text: str, length: int = 12):
-        """Autonomous emotional-arc playlist for a request (Phase 6)."""
-        return self.agent.run(text, length=length)
+        """Autonomous emotional-arc playlist (Phase 6), with language parity.
+
+        curate() passes the detected market straight into recommend(), but the
+        agent reaches recommend() through its tools and can't forward arguments.
+        So we set the market as the recommender's instance policy for this run
+        (the agent's tools share that recommender) and restore it after. The lock
+        stops two concurrent journeys from crossing languages.
+        """
+        market = detect_market(text)
+        if market:
+            print(f"[policy] market detected from request: {market}")
+        with self._journey_lock:
+            prev = self.recommender.default_market
+            self.recommender.default_market = market
+            try:
+                return self.agent.run(text, length=length)
+            finally:
+                self.recommender.default_market = prev
 
     # ── FUN FEATURE: live player ──
     def live_start(self, track_id: str) -> str:
