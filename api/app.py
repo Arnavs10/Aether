@@ -87,9 +87,20 @@ app.include_router(voice_router)
 app.include_router(web_router)# ← new
 app.include_router(chat_router)
 
+# Origins come from the environment so the deployed host can be locked down
+# without a code change. Local dev keeps working with the defaults.
+import os as _os
+_origins = [
+    o.strip()
+    for o in _os.getenv(
+        "AETHER_CORS_ORIGINS",
+        "http://localhost:5173,http://127.0.0.1:5173",
+    ).split(",")
+    if o.strip()
+]
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],              # dev: any origin. tighten to your deployed URL later.
+    allow_origins=_origins,
     allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
