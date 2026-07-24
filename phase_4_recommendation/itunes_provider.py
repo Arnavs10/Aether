@@ -206,6 +206,68 @@ def _is_search_bait(raw: dict, term_words: set[str]) -> bool:
         return False
     return sum(1 for w in term_words if w in title) >= 2
 
+# How many iTunes candidates to consider when resolving one store track.
+# iTunes ranks on keyword relevance with no exact-match guarantee, so the right
+# recording is often not first for generic titles ("Miracle", "Lost My Soul").
+_ENRICH_CANDIDATES = 5
+
+# Release-variant suffixes stripped before comparing titles, so a legitimate
+# reissue ("Song (Remastered 2011)") still matches the store's "Song".
+_TITLE_NOISE = (
+    " (remaster", " - remaster", " (live", " - live", " (feat",
+    " (radio edit", " - single", " - ep", " (deluxe", " (bonus",
+    " (original", " (explicit", " (clean", " (mono", " (stereo",
+)
+
+
+def _normalize(text: str) -> str:
+    """Lowercase, expand '&', drop punctuation, collapse whitespace."""
+    text = (text or "").lower().replace("&", " and ")
+    text = "".join(c if (c.isalnum() or c.isspace()) else " " for c in text)
+    return " ".join(text.split())
+
+
+def _strip_title_noise(title: str) -> str:
+    """Cut a title at the first release-variant marker, if any."""
+    low = (title or "").lower()
+    cut = len(low)
+    for marker in _TITLE_NOISE:
+        idx = low.find(marker)
+        if idx != -1:
+            cut = min(cut, idx)
+    return (title or "")[:cut]
+
+
+def _is_same_song(raw: dict, want_title: str, want_artist: str) -> bool:
+    """True if an iTunes result is plausibly the same recording we asked for.
+
+    Used only to *prefer* one candidate over another. The caller still falls
+    back to the top result when nothing matches, so this can never remove a
+    link that would otherwise have been attached.
+
+    Args:
+        raw: one iTunes search result.
+        want_title: the store track's title.
+        want_artist: the store track's artist.
+
+    Returns:
+        True if the result should be preferred as the same song.
+    """
+    got_title = _normalize(_strip_title_noise(raw.get("trackName") or ""))
+    got_artist = _normalize(raw.get("artistName") or "")
+    exp_title = _normalize(_strip_title_noise(want_title))
+    exp_artist = _normalize(want_artist)
+
+    if not (got_title and got_artist and exp_title and exp_artist):
+        return False
+
+    title_ok = got_title == exp_title
+    artist_ok = (
+        got_artist == exp_artist
+        or exp_artist in got_artist
+        or got_artist in exp_artist
+    )
+    return title_ok and artist_ok
 
 def _default_http_get(url: str, timeout: float = 10.0) -> dict[str, Any]:
     """GET `url` and parse JSON (stdlib only — no `requests` dependency)."""
@@ -290,13 +352,25 @@ class ITunesProvider(MusicProvider):
 
     # ── MusicProvider API ──
     def enrich(self, tracks: list[Track]) -> list[Track]:
-        """Resolve each store pick to playable iTunes data (in place, order kept)."""
+        """Resolve each store pick to playable iTunes data (in place, order kept).
+
+        Asks iTunes for several candidates and prefers the first whose title and
+        artist match the store track, instead of blindly taking the top hit —
+        which attached a different song's link, cover and preview whenever the
+        title was generic. When nothing matches, the top hit is used exactly as
+        before, so no track ever loses a link relative to the old behaviour.
+        """
         for t in tracks:
             if t.provider_ref:            # fresh picks already resolved
                 continue
-            results = self._search(f"{t.title} {t.artist}", 1)
-            if results:
-                t.provider_ref = self._raw_to_track(results[0]).provider_ref
+            results = self._search(f"{t.title} {t.artist}", _ENRICH_CANDIDATES)
+            if not results:
+                continue
+            chosen = next(
+                (r for r in results if _is_same_song(r, t.title, t.artist)),
+                results[0],                # same fallback as the old code
+            )
+            t.provider_ref = self._raw_to_track(chosen).provider_ref
         return tracks
 
     def discover(self, emotion: str, limit: int,
