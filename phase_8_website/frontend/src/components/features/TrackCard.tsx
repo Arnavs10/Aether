@@ -120,7 +120,7 @@ export function TrackCard({ track, onLiveMix, active = false, onPlayIntent }: Pr
           aria-expanded={openWhy}
           className="mono-meta border-b border-paper/25 pb-0.5 text-paper/60 transition-colors hover:border-blue hover:text-paper"
         >
-          {openWhy ? "close the reasoning" : "(the reasoning)"}
+          {openWhy ? "close extra detail" : "(extra detail)"}
         </button>
         <a
           href={delivery.appleUrl ?? links.youtube}

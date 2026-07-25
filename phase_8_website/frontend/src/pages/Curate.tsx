@@ -201,7 +201,7 @@ export default function Curate() {
       {/* ── the controls ─────────────────────────────────── */}
       <section className="px-6 pb-10 md:px-10">
         <div className="glass-liquid rounded-sm p-6 md:p-8">
-          <ParenLabel>PICK A FEELING, OR BLEND A FEW</ParenLabel>
+          <ParenLabel>PICK A FEELING, OR BLEND ANY 2</ParenLabel>
           <div className="mt-4">
             <EmotionChips
               labels={labels}
