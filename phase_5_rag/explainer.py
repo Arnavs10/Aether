@@ -34,6 +34,7 @@ mirroring the matcher's blended target.
 
 from __future__ import annotations
 
+import random
 import sys
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
@@ -41,6 +42,106 @@ from pathlib import Path
 from typing import Any, Callable, Optional
 
 import numpy as np
+
+# ── Fresh-pick reasoning pool ──────────────────────────────────────
+# Fresh (Apple current-catalogue) picks carry no measured features, so they
+# cannot get a quantified "feature X sits close to target" line like store
+# picks do. Rather than repeat one identical sentence for every fresh track,
+# rotate through a small per-emotion pool and choose one at random per track.
+# Purely presentational: no effect on matching, scoring, sequencing, retrieval
+# or citations. Keyed on the emotion label (e.g. "happy").
+_FRESH_LINES: dict[str, tuple[str, ...]] = {
+    "happy": (
+        "A fresh pick pulled live from Apple's current catalogue, holding its place for feel rather than a measured match — bright and upbeat enough to lift the set.",
+        "Surfaced by the freshness layer instead of the stored library, this recent release fits on tone alone: warm, major-key energy that suits a happy mood.",
+        "Sourced from today's catalogue rather than scored on features, it earns its spot for its celebratory, open feel — exactly what this mood wants.",
+    ),
+    "sad": (
+        "A fresh pick from Apple's current catalogue rather than the measured library, chosen for feel: quiet, downtempo, and heavy enough to sit with the mood.",
+        "Surfaced live by the freshness layer instead of a feature match, this recent release fits on tone — the kind of tender, low weight a sad set leans into.",
+        "Sourced from today's catalogue rather than scored on stored features, it holds its place for its melancholy pull, not a library number.",
+    ),
+    "angry": (
+        "A fresh pick pulled live from Apple's current catalogue rather than the library, chosen for feel: raw, high-intensity, and forceful enough to match the heat.",
+        "Surfaced by the freshness layer instead of a feature match, this recent release fits on tone alone — the aggressive edge an angry set wants.",
+        "Sourced from today's catalogue rather than scored on features, it earns its spot for sheer intensity, not a measured library reading.",
+    ),
+    "calm": (
+        "A fresh pick from Apple's current catalogue rather than the measured library, chosen for feel: soft, unhurried, and gentle enough to settle into.",
+        "Surfaced live by the freshness layer instead of a feature match, this recent release fits on tone — the quiet stillness a calm set is built around.",
+        "Sourced from today's catalogue rather than scored on stored features, it holds its place for its easy, low-key feel, not a library number.",
+    ),
+    "anxious": (
+        "A fresh pick pulled live from Apple's current catalogue rather than the library, chosen for feel: restless, on-edge, and matched to the unsettled mood.",
+        "Surfaced by the freshness layer instead of a feature match, this recent release fits on tone alone — the tense, coiled energy this mood carries.",
+        "Sourced from today's catalogue rather than scored on features, it earns its spot for its unsettled feel, not a measured library reading.",
+    ),
+    "energetic": (
+        "A fresh pick from Apple's current catalogue rather than the measured library, chosen for feel: driving, kinetic, and quick enough to keep you moving.",
+        "Surfaced live by the freshness layer instead of a feature match, this recent release fits on tone — the momentum an energetic set is built on.",
+        "Sourced from today's catalogue rather than scored on stored features, it holds its place for its push and pace, not a library number.",
+    ),
+    "focused": (
+        "A fresh pick pulled live from Apple's current catalogue rather than the library, chosen for feel: steady, clean, and undistracting enough to work to.",
+        "Surfaced by the freshness layer instead of a feature match, this recent release fits on tone alone — the even flow a focused set wants.",
+        "Sourced from today's catalogue rather than scored on features, it earns its spot for its steady feel, not a measured library reading.",
+    ),
+    "nostalgic": (
+        "A fresh pick from Apple's current catalogue rather than the measured library, chosen for feel: wistful, warm, and turned toward memory.",
+        "Surfaced live by the freshness layer instead of a feature match, this recent release fits on tone — the looking-back pull a nostalgic set leans into.",
+        "Sourced from today's catalogue rather than scored on stored features, it holds its place for its wistful feel, not a library number.",
+    ),
+    "romantic": (
+        "A fresh pick pulled live from Apple's current catalogue rather than the library, chosen for feel: warm, intimate, and tender enough for the mood.",
+        "Surfaced by the freshness layer instead of a feature match, this recent release fits on tone alone — the close, love-leaning feel this set wants.",
+        "Sourced from today's catalogue rather than scored on features, it earns its spot for its intimacy, not a measured library reading.",
+    ),
+    "melancholic": (
+        "A fresh pick from Apple's current catalogue rather than the measured library, chosen for feel: heavy, reflective, and somber enough to match the weight.",
+        "Surfaced live by the freshness layer instead of a feature match, this recent release fits on tone — the low, brooding pull a melancholic set carries.",
+        "Sourced from today's catalogue rather than scored on stored features, it holds its place for its reflective feel, not a library number.",
+    ),
+    "confident": (
+        "A fresh pick pulled live from Apple's current catalogue rather than the library, chosen for feel: bold, assured, and assertive enough to own the moment.",
+        "Surfaced by the freshness layer instead of a feature match, this recent release fits on tone alone — the swagger a confident set is built on.",
+        "Sourced from today's catalogue rather than scored on features, it earns its spot for its self-assured feel, not a measured library reading.",
+    ),
+    "hopeful": (
+        "A fresh pick from Apple's current catalogue rather than the measured library, chosen for feel: uplifting, forward-looking, and bright with quiet optimism.",
+        "Surfaced live by the freshness layer instead of a feature match, this recent release fits on tone — the rising lift a hopeful set leans into.",
+        "Sourced from today's catalogue rather than scored on stored features, it holds its place for its hopeful feel, not a library number.",
+    ),
+    "frustrated": (
+        "A fresh pick pulled live from Apple's current catalogue rather than the library, chosen for feel: tense, pent-up, and matched to the friction in the mood.",
+        "Surfaced by the freshness layer instead of a feature match, this recent release fits on tone alone — the coiled edge this mood carries.",
+        "Sourced from today's catalogue rather than scored on features, it earns its spot for its charged feel, not a measured library reading.",
+    ),
+    "lonely": (
+        "A fresh pick from Apple's current catalogue rather than the measured library, chosen for feel: spare, solitary, and quiet enough to sit alone with.",
+        "Surfaced live by the freshness layer instead of a feature match, this recent release fits on tone — the isolation a lonely set leans into.",
+        "Sourced from today's catalogue rather than scored on stored features, it holds its place for its solitary feel, not a library number.",
+    ),
+    "dreamy": (
+        "A fresh pick pulled live from Apple's current catalogue rather than the library, chosen for feel: soft, drifting, and hazy enough to float in.",
+        "Surfaced by the freshness layer instead of a feature match, this recent release fits on tone alone — the weightless atmosphere a dreamy set wants.",
+        "Sourced from today's catalogue rather than scored on features, it earns its spot for its dreamlike feel, not a measured library reading.",
+    ),
+}
+_FRESH_FALLBACK: tuple[str, ...] = (
+    "A fresh pick pulled live from Apple's current catalogue rather than the measured library, holding its place for fit with this mood rather than a stored number.",
+    "Surfaced by the freshness layer instead of a feature match, this recent release earns its spot on feel — chosen to suit the mood, not scored against the library.",
+    "Sourced live from today's catalogue rather than the stored features, it fits here on tone alone rather than a measured library reading.",
+)
+
+
+def _fresh_reason(emotion: str) -> str:
+    """Pick one varied reasoning line for a fresh track, by emotion label.
+
+    Falls back to a generic pool for blended or unknown emotions. Purely
+    cosmetic — no effect on matching, scoring, or citations.
+    """
+    key = (emotion or "").split("+")[0].strip().lower()
+    return random.choice(_FRESH_LINES.get(key, _FRESH_FALLBACK))
 
 # ── Path bootstrap: root config + Phase 2 (normalizer/schema) + local modules ──
 _ROOT = Path(__file__).resolve().parent.parent
@@ -289,9 +390,9 @@ class GroundedTemplateExplainer(Explainer):
             if feat_doc is not None:
                 pieces.append(_first_sentence(feat_doc.text))
                 cites.append(feat_doc.doc_id)
+
         elif info["is_fresh"]:
-            pieces.append("It's a fresh, current-catalog pick surfaced for this "
-                          "mood rather than a feature-matched library track.")
+            pieces.append(_fresh_reason(emotion))
             sig_doc = self._feature_doc(info["signature"], hits)
             if sig_doc is not None:
                 cites.append(sig_doc.doc_id)

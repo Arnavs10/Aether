@@ -74,11 +74,11 @@ def _itunes_latest(limit: int = 12) -> str:
     though the model itself has no 2026 facts.
 
     Apple retired the old itunes.apple.com/rss generator; the live endpoint is
-    rss.applemarketingtools.com. Both are tried, newest first.
+    rss.marketingtools.apple.com. Both are tried, newest first.
     """
     # Current generator (JSON shape: feed.results[]).
     try:
-        url = (f"https://rss.applemarketingtools.com/api/v2/us/music/"
+        url = (f"https://rss.marketingtools.apple.com/api/v2/us/music/"
                f"most-played/{limit}/songs.json")
         data = json.loads(_cached_get(url))
         results = data.get("feed", {}).get("results", [])
