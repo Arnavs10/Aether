@@ -173,7 +173,7 @@ Aether/
 ## Design notes
 
 > <!-- SUBTLE LINE — replace with your exact wording, or keep the line below -->
-> The interface follows a clean, understated, premium design language. The web frontend was made with an AI-assisted build workflow; the architecture, backend, machine-learning stack, and product design behind it are my own, built by my own mind.
+> The interface follows a clean, understated, premium design language. The web frontend was built with an AI-assisted build kind workflow; the architecture, backend, machine-learning stack, and product design behind it are my own, built by my own mind.
 
 The visual system is intentionally minimal: a fixed dark palette, a single display typeface, glass surfaces, and hairline detailing, so the focus stays on the music and the emotion behind it.
 
