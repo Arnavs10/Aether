@@ -1,121 +1,218 @@
-# AETHER — Phase 8 website (`phase_8_website/frontend/`)
+<div align="center">
 
-Frontend for the Aether emotion-aware music-intelligence platform. It fronts
-the finished FastAPI service in `api/` at the repo root: the 1.2M-track
-matching brain, text + voice emotion reading, explained picks, the journey
-planner, live drift with harmonic crossfades, and the assistant.
+# 🎧 Aether
 
-**Stack:** Vite · React 19 · TypeScript · Tailwind v4 · GSAP + ScrollTrigger ·
-Lenis. Client-only SPA by design.
+### Emotion-Aware Music Intelligence
 
-**Language truth (everywhere in the UI):** you can **type in English or
-Hindi** and **speak in English**. Spoken Hindi is not supported. In free
-text you can also **ask for a language** ("some sad hindi songs", "kpop for
-studying") and the catalogue follows: Hindi, Punjabi, Tamil, Telugu, Korean,
-Japanese, Spanish, French, English.
+**Tell Aether how you feel, in your own words, and it composes a playlist built for that exact state.**
+
+[**Live**](https://aether-emotion-music.vercel.app) · [Report a bug](https://github.com/Arnavs10/Aether/issues) · [Request a feature](https://github.com/Arnavs10/Aether/issues)
+
+![Python](https://img.shields.io/badge/Python-3.11-3776AB?logo=python&logoColor=white)
+![PyTorch](https://img.shields.io/badge/PyTorch-EE4C2C?logo=pytorch&logoColor=white)
+![FastAPI](https://img.shields.io/badge/FastAPI-009688?logo=fastapi&logoColor=white)
+![React](https://img.shields.io/badge/React-19-61DAFB?logo=react&logoColor=black)
+![LangGraph](https://img.shields.io/badge/LangGraph-Agentic-1C3C3C)
+![Tests](https://img.shields.io/badge/tests-24%2F24%20passing-brightgreen)
+![Status](https://img.shields.io/badge/status-deployed-success)
+
+</div>
 
 ---
 
-## Run it (two terminals)
+## What Aether is
+
+Most mood-music tools read your listening history and guess. Aether starts from *you*: you describe your emotional state in free-form English or Hindi, or you speak it in English, and Aether reads the nuance in your words and voice, maps it onto a large catalogue of measured song characteristics, and returns a sequenced playlist that actually fits the feeling. Every recommendation comes with a plain-language reason, and an optional technical breakdown grounded in the song's real audio features.
+
+It recognizes **15 nuanced emotions** rather than a flat happy or sad, understands mixed and shifting moods, and can plan an entire emotional arc for a session rather than a static list.
+
+**Live:** https://aether-emotion-music.vercel.app
+
+---
+
+## Key features
+
+- **Free-form emotional input.** Type how you feel in English or Hindi, or speak it in English. No genre picking, no seed tracks.
+- **Multimodal emotion understanding.** A fine-tuned text model and a voice model read the emotion in your words and your tone, then a learned fusion layer combines them into one signal.
+- **15-emotion taxonomy.** happy, sad, angry, calm, anxious, energetic, focused, nostalgic, romantic, melancholic, confident, hopeful, frustrated, lonely, dreamy.
+- **Explained recommendations.** Each track carries a human-readable `why`, plus a feature-grounded `why_technical` for the curious.
+- **Journey mode.** An autonomous agent plans a multi-stage emotional arc for a whole session, not just a single mood snapshot.
+- **Harmonic Live mode.** A continuously adapting player that detects emotional drift as you keep talking and transitions between compatible tracks using Camelot-wheel harmonic matching.
+- **Fresh delivery.** Recommendations are enriched with current, playable tracks through the iTunes Search API, with one-tap deep links.
+
+---
+
+## How it works
+
+Aether is built as a layered pipeline. Each stage is independently testable, and the whole backend ships with a green test suite.
+
+```mermaid
+flowchart LR
+    A["Text or Voice input<br/>(EN / HI text, EN voice)"] --> B["Emotion Detection<br/>Text model + Voice model"]
+    B --> C["Fusion Layer<br/>learned multimodal blend"]
+    C --> D["Emotion → Music Matcher<br/>feature-space retrieval"]
+    D --> E["Recommender + Sequencer<br/>freshness, diversity, arc"]
+    E --> F["RAG Explainability<br/>why + why_technical"]
+    E --> G["Agentic Journey Planner<br/>perceive → plan → act → reflect → explain"]
+    E --> H["Harmonic Live Engine<br/>drift detection + crossfade"]
+    F --> I["FastAPI service"]
+    G --> I
+    H --> I
+    I --> J["React / Vite web app"]
+```
+
+### The layers, in plain terms
+
+1. **Text emotion.** A fine-tuned DistilRoBERTa reads written input and outputs a distribution over the 15 emotions. It was trained on 80K+ labeled sentences, with several source label spaces mapped into one unified taxonomy.
+2. **Voice emotion.** A frozen emotion2vec+ foundation model provides speech embeddings, and a custom MLP head classifies emotion from tone and prosody. Whisper handles speech-to-text. This model reaches 87.2% accuracy and 0.87 weighted F1 on a combined RAVDESS + CREMA-D set.
+3. **Fusion.** A learned fuser (trained on MELD) combines the text and voice signals into a single emotional read, and adapts gracefully when only one input is present.
+4. **Music matching.** Emotions are matched against a 1.2M-song feature store built from six measured audio characteristics: tempo, energy, valence, danceability, acousticness, and instrumentalness. An intent parser handles English and Hindi requests, supports blended and mixed moods, and enforces artist diversity.
+5. **Recommendation and sequencing.** The recommender enriches matches with fresh, playable tracks, sequences them for flow, and exports deep links.
+6. **Explainability.** A retrieval-grounded layer produces the plain `why` and the feature-based `why_technical` so recommendations are never a black box.
+7. **Agentic Journey planning.** A LangGraph agent runs a perceive, plan, act, reflect, explain loop to design an emotional arc across a whole listening session.
+8. **Harmonic transitions.** For continuous Live playback, a drift detector (Jensen-Shannon divergence over the emotional distribution) decides when to move, and a Camelot-wheel matcher picks harmonically compatible transitions with a crossfade planner.
+
+---
+
+## Tech stack
+
+| Layer | Technology |
+|-------|-----------|
+| ML / Models | Python, PyTorch, HuggingFace Transformers, DistilRoBERTa, emotion2vec+, Whisper, scikit-learn |
+| Agentic / RAG | LangChain, LangGraph, grounded retrieval, LLM tool calling |
+| Backend | FastAPI, Python |
+| Frontend | React 19, Vite, TypeScript, Tailwind CSS, GSAP, Lenis |
+| Delivery API | iTunes Search API |
+| Deployment | Azure VM (backend), Vercel (frontend) |
+| Training | Google Colab (T4 GPU) |
+
+---
+
+## Data and reproducibility
+
+The emotion-matching brain runs on a **1.2M-song feature store** derived from the public *Almost 1 Million Songs* dataset on Kaggle. The store keeps six measured audio features per track.
+
+Following standard practice for machine-learning repositories, the large processed store and the trained model weights are **not committed to Git**. Datasets and weights are build artifacts, not source code, and Git tracks source. Everything needed to regenerate them is in this repo, and the source data is publicly available, so the pipeline is fully reproducible:
 
 ```bash
-# terminal 1 — the engine, from the repo root:
-cd api
-export AETHER_STORE=/path/to/music_store.npz
-export GROQ_API_KEY=...
-export GROQ_MODEL=...
-uvicorn app:app --reload            # → http://127.0.0.1:8000
-
-# terminal 2 — the site, from phase_8_website/frontend/:
-cp .env.example .env                # points at http://127.0.0.1:8000
-npm install
-npm run dev                         # → http://localhost:5173
+# 1. Download the source dataset from Kaggle (Almost 1 Million Songs)
+# 2. Build the feature store locally
+python phase_2_music_data/build_store.py
+# produces the local .npz feature store used by the matcher
 ```
 
-| Script              | Does                                          |
-| ------------------- | --------------------------------------------- |
-| `npm run dev`       | Vite dev server on :5173                      |
-| `npm run build`     | typecheck (`tsc --noEmit`) + production build |
-| `npm run preview`   | serve the production build locally            |
-| `npm run typecheck` | typecheck only                                |
-
-**Env var:** `VITE_API_BASE` only. No secrets ever live in the frontend.
+Fresh, playable tracks are fetched at request time from the iTunes Search API, so the app stays current without shipping any audio.
 
 ---
 
-## Two kinds of track (the freshness layer)
+## Getting started
 
-A playlist blends **store picks** (measured features, match %, live-mixable)
-with **fresh picks** sourced live from Apple's current catalogue
-(`track_id` starts with `itunes:`; features and match are `null`; always
-playable; never live-mixable). The single predicate lives in
-`src/lib/tracks.ts → isFreshPick()`. Cards render the two differently on
-purpose: fresh picks show `(FRESH)`, never a percentage, never meters,
-never a live-mix action.
+### Prerequisites
 
-Tracks arrive already playable (`preview_url`, `cover`, `link`); the
-client-side iTunes resolver (`src/lib/itunes.ts`, priority queue with a
-burst-then-throttle schedule and viewport boosting) only handles the rare
-track that ships without them.
+- Python 3.11+
+- Node.js 18+
+- A Groq API key (free tier is sufficient)
 
-## Playback
+### Backend
 
-One shared player (`src/lib/audio.ts` + `src/components/player/`) serves
-all three feature pages: one track at a time app-wide, visible states,
-calm unavailable handling. Journey has "play the route" with auto-advance
-and jump-to-card. Live runs a **real crossfade** on a drift trigger: two
-audio elements, equal-power volume ramp over the engine's duration, capped
-against the audio remaining, visuals synced to the actual fade, with a
-visual-only fallback when no preview exists.
+```bash
+git clone https://github.com/Arnavs10/Aether.git
+cd Aether
 
-## Where things live
+python -m venv .venv
+source .venv/bin/activate          # Windows: .venv\Scripts\activate
+pip install -r requirements.txt
 
-```
-src/
-├── config/site.ts        nav · links · flags · canonical 15-emotion fallback
-├── lib/                  api client · types · tracks predicate · itunes
-│                         resolver · shared audio player · export · gsap
-├── state/AppState.tsx    engine status · appReady gate · shared Lenis
-├── components/
-│   ├── global/           Preloader · SmoothScroll · AmbientWaves · Grain ·
-│   │                     ScrollProgress · Nav · Footer · Faq · GoopField ·
-│   │                     Chatbot
-│   ├── ui/               ParenLabel · Reveal · Marquee · PageScaffold ·
-│   │                     SpectrumArt (+EmotionSpectrum · Constellation ·
-│   │                     wall) · SleeveFan · VinylDisc · PipelineGallery ·
-│   │                     BarsLoader
-│   ├── player/           PlayButton · useTrackDelivery
-│   └── features/         EmotionChips · VoiceMic · TrackCard · Downloads
-└── pages/                Home · Curate · Journey · Live · Connect · 404
+# build the feature store (see Data section above)
+python phase_2_music_data/build_store.py
+
+# run the API (backend lives in api/ at the repo root)
+uvicorn api.service:app --reload
 ```
 
-Notes that matter when editing:
+> The frontend README (`phase_8_website/frontend/README.md`) has the frontend-specific setup, and `.env.example` there lists the web app's environment variables.
 
-- **Send rule (Curate):** chips → voice reading → text, surfaced live in
-  the status line; the textarea dims when chips drive. Never send
-  `distribution: []`.
-- **`GET /tracks`** field is `name`, not `title`; it powers the Live seed
-  picker (shuffle accumulates, filter covers what's loaded only).
-- **Chat** always sends history (capped 12); `source` is never rendered;
-  a fallback reply is replaced with our own line.
-- The footer bottom bar shows the **visitor's** city and live local time:
-  one keyless IP lookup (display-only, cached per session), timezone
-  fallback, time-only last. Never `navigator.geolocation`.
-- Glass (`.glass-liquid`) is applied to exactly three surface groups
-  (chatbot, feature control panels + player, the 4E/feed panels) with an
-  `@supports` fallback. Keep it off full-width and canvas-adjacent
-  surfaces.
-- `FLAGS.spotifyLogin` is false and renders nothing.
+### Frontend
 
-## State of the build
+```bash
+cd phase_8_website/frontend
+npm install
+npm run dev
+```
 
-Pass 4 shipped in full: the §15 order was executed top to bottom with no
-cut line. Language sweep, fresh/store rendering, playback on all three
-pages with the real Live crossfade, the Curate input truth + mic append +
-resolver speed + language surfacing, the merged Connect form with legible
-failures, mobile down to 360px, the seed picker, the visitor clock, the
-per-emotion spectrum system with its fifteen lines, the constellation, the
-denser field, the hero sleeve fan, the FAQ disc, the real marquee, the
-designed footer wall, the pinned pipeline gallery, the arc-wheel stack,
-and liquid glass. Phase 8.5 (Google Sign-In + history) remains future
-scope; `lib/api.ts` stays the single seam for it.
+### Environment variables
+
+| Variable | Purpose |
+|----------|---------|
+| `GROQ_API_KEY` | LLM provider for explanations, chatbot, and Journey planning |
+| `AETHER_STORE` | Selects the full feature store vs a sample store |
+| `AETHER_LLM_EXPLANATIONS` | `0` routes per-track explanations to grounded templates and preserves the LLM budget for chat and Journey; `1` uses the LLM per track |
+| `AETHER_FRESHNESS` | Toggles the iTunes freshness enrichment layer |
+| `AETHER_YEAR_MIN` | Minimum release year for fresh-track discovery |
+
+---
+
+## Project structure
+
+```
+Aether/
+├── api/                          # FastAPI service layer (the deployed backend)
+├── phase_1a_text_emotion/        # Fine-tuned DistilRoBERTa (text emotion)
+├── phase_1b_voice_emotion/       # emotion2vec+ head + Whisper (voice emotion)
+├── phase_1c_fusion/              # Learned multimodal fusion layer
+├── phase_2_music_data/           # Feature store builder (1.2M songs, 6 features)
+├── phase_3_emotion_music_mapping/# Emotion → music matcher, EN/HI intent parser
+├── phase_4_recommendation/       # Recommender, sequencer, freshness, exporter
+├── phase_5_rag/                  # Grounded explainability (why / why_technical)
+├── phase_6_agentic_ai/           # LangGraph Journey planner
+├── phase_7_drift_crossfade/      # Camelot matching, drift detection, crossfade
+├── phase_8_website/frontend/     # React / Vite / TypeScript web app
+├── tests/                        # Backend test suite
+├── config.py                     # Central config (emotions, paths, constants)
+└── requirements.txt
+```
+
+---
+
+## Design notes
+
+> <!-- SUBTLE LINE — replace with your exact wording, or keep the line below -->
+> The interface follows a clean, understated, premium design language. The web frontend was made with an AI-assisted build workflow; the architecture, backend, machine-learning stack, and product design behind it are my own, built by my own mind.
+
+The visual system is intentionally minimal: a fixed dark palette, a single display typeface, glass surfaces, and hairline detailing, so the focus stays on the music and the emotion behind it.
+
+---
+
+## Roadmap
+
+Aether is fully deployed and functional on desktop. Planned next steps:
+
+- **Full mobile optimization.** The core experience works across devices, and the Live and Connect experiences are being refined for a complete, polished phone build. This is the current top priority.
+- **Deeper chatbot knowledge.** The assistant answers current-chart questions well today; support for latest-artist and latest-album/discography lookups will be strengthened in an upcoming update so it is complete across every kind of query.
+- **Accounts and profiles.** Google sign-in and saved profiles.
+- **Streaming export.** Spotify and Apple Music OAuth for one-tap playlist export.
+
+---
+
+## Known boundaries (by design)
+
+- **Voice input is English-only.** You can type in English or Hindi, and speak in English.
+- **Live harmonic transitions use the measured local store.** Fresh iTunes tracks do not expose key or BPM metadata, so precise harmonic matching runs on the store where those values are measured. This is a deliberate accuracy choice, not a gap.
+- **Explanation budget is managed.** Per-track explanations can run as grounded templates to preserve the LLM budget for the chatbot and Journey planning.
+
+---
+
+## Acknowledgements
+
+Built on the shoulders of open research and tooling: HuggingFace Transformers, the emotion2vec+ and Whisper model families, RAVDESS and CREMA-D, the MELD dataset, and the public *Almost 1 Million Songs* dataset.
+
+---
+
+## Contact
+
+**Arnav Shukla**
+[Portfolio](https://v0-portfolio-website-clone-nu-sage.vercel.app) · [GitHub](https://github.com/Arnavs10) · [LinkedIn](https://www.linkedin.com/in/arnav-shukla10/) · arnavshuklaforbusiness@gmail.com
+
+<div align="center">
+<sub>Aether · emotion-aware music intelligence</sub>
+</div>
