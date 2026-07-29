@@ -1,14 +1,47 @@
-# Aether — Web App (`phase_8_website/frontend/`)
+# Aether — Website (Phase 8)
 
-The frontend for **Aether**, an emotion-aware music-intelligence platform. This is a client-only single-page app that fronts the Aether backend (the FastAPI service in [`api/`](../../api) at the repo root): the 1.2M-track matching brain, text and voice emotion reading, explained picks, the Journey planner, live drift with harmonic crossfades, and the in-app assistant.
+The website layer of **Aether**, an emotion-aware music-intelligence platform. Phase 8 is where the finished machine-learning system (Phases 1 to 7) becomes a usable product: a **FastAPI backend** that serves the pipeline over REST, and a **React web app** that people actually interact with.
 
-For the full system overview, models, and architecture, see the [root README](../../README.md). This document covers the web app only.
+This README covers the whole website phase, both halves and how they fit together. For the models, the ML pipeline, and the full system architecture, see the [root README](../README.md).
 
 **Live:** https://aether-emotion-music.vercel.app
 
 ---
 
+## The two halves
+
+Phase 8 has two parts, which live in two places in the repo:
+
+| Part | Location | What it is |
+|------|----------|------------|
+| **Backend / API** | [`api/`](../api) (repo root) | FastAPI service that wraps the recommender, RAG, agent, and live engine and exposes them as REST endpoints. |
+| **Frontend / Web app** | [`frontend/`](./frontend) (this folder) | React + Vite single-page app that consumes the API and presents the whole experience. |
+
+The frontend is a client-only SPA; all the intelligence lives behind the API, and the two communicate over HTTP.
+
+```
+Browser (React / Vite SPA on Vercel)
+        │  REST over HTTPS
+        ▼
+FastAPI service (api/, on an Azure VM)
+        │  in-process calls
+        ▼
+Aether pipeline (Phases 1 to 7: emotion models → fusion → matching → RAG → agent → live engine)
+```
+
+---
+
 ## Stack
+
+**Backend**
+
+| Concern | Choice |
+|---------|--------|
+| Framework | FastAPI (Python) |
+| Serves | Recommender (Phase 4), RAG (Phase 5), Journey agent (Phase 6), live engine (Phase 7) |
+| Hosting | Azure VM |
+
+**Frontend**
 
 | Concern | Choice |
 |---------|--------|
@@ -17,9 +50,7 @@ For the full system overview, models, and architecture, see the [root README](..
 | Styling | Tailwind CSS v4 (CSS-first `@theme`) |
 | Motion | GSAP + ScrollTrigger, Lenis (smooth scroll) |
 | Routing | React Router (client-side SPA) |
-| Hosting | Vercel (SPA rewrite via `vercel.json`) |
-
-Client-only SPA by design: all rendering happens in the browser, and the app talks to the backend over the REST API.
+| Hosting | Vercel (SPA rewrite via `frontend/vercel.json`) |
 
 ---
 
@@ -34,46 +65,52 @@ Client-only SPA by design: all rendering happens in the browser, and the app tal
 
 ---
 
-## Getting started
+## Running the website locally
 
-### Prerequisites
+You run the two halves separately: the API first, then the web app that talks to it.
 
-- Node.js 18+
-- The Aether backend running and reachable (see [`api/`](../../api) and the root README)
-
-### Setup
+### 1. Backend (API)
 
 ```bash
 # from the repo root
-cd phase_8_website/frontend
+python -m venv .venv
+source .venv/bin/activate          # Windows: .venv\Scripts\activate
+pip install -r requirements.txt
 
+# the backend needs GROQ_API_KEY set (see the root README for all backend env vars)
+uvicorn api.service:app --reload
+```
+
+### 2. Frontend (web app)
+
+```bash
+cd phase_8_website/frontend
 npm install
 
-# configure the API endpoint the app talks to
+# point the app at your running API
 cp .env.example .env
-# then open .env and fill in the values it lists
+# then open .env and fill in the values it lists (the API base URL)
 
 npm run dev
 ```
 
-### Build
-
-```bash
-npm run build      # production build → dist/
-npm run preview    # preview the production build locally
-```
+Open the dev URL Vite prints, and the app will talk to your local API.
 
 ---
 
 ## Configuration
 
-Copy `.env.example` to `.env` and fill in the values it lists (the base URL of the Aether backend the app calls). The example file is the source of truth for which variables are needed.
+- **Backend** reads its keys and toggles from environment variables (`GROQ_API_KEY`, the feature-store and freshness settings, and so on). The full list is in the [root README](../README.md).
+- **Frontend** reads its settings from `frontend/.env` (copied from `frontend/.env.example`), which holds the base URL of the backend the app calls. That example file is the source of truth for the variables it needs.
 
 ---
 
 ## Deployment
 
-Deployed on **Vercel** as a static SPA build. `vercel.json` holds the single-page rewrite so client-side routes resolve correctly on refresh and deep links. Pushing to `main` triggers a Vercel build of this folder.
+- **Frontend** is deployed on **Vercel** as a static SPA build. `frontend/vercel.json` holds the single-page rewrite so client-side routes resolve correctly on refresh and deep links. Pushing to `main` triggers a Vercel build of the `frontend/` folder.
+- **Backend** runs on an **Azure VM**, serving the FastAPI app the frontend calls.
+
+The two deploy independently: the browser app on Vercel, the API on Azure, talking over HTTPS.
 
 ---
 
@@ -85,8 +122,8 @@ The interface follows a clean, understated, premium design language: a fixed dar
 
 ## Notes
 
-The web app is fully deployed and works end to end on desktop. A refined, fully optimized mobile experience (in particular the Live and Connect pages) is in progress and is the current top priority on the roadmap.
+The website is fully deployed and works end to end on desktop. A refined, fully optimized mobile experience (in particular the Live and Connect pages) is in progress and is the current top priority on the roadmap.
 
 ---
 
-*Part of [Aether](../../README.md) · emotion-aware music intelligence.*
+*Part of [Aether](../README.md) · emotion-aware music intelligence.*
